@@ -164,11 +164,14 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           );
         } catch (error) {
           const message =
-            error instanceof N8nClientError && error.code === "TIMEOUT"
-              ? "Voice request timed out."
+            error instanceof N8nClientError
+              ? error.code === "TIMEOUT"
+                ? "Voice request timed out waiting for n8n."
+                : error.message
               : "Voice assistant is temporarily unavailable.";
           await failWorkflowRequest(db, requestId, message);
-          const status = error instanceof N8nClientError && error.code === "TIMEOUT" ? 504 : 502;
+          const status =
+            error instanceof N8nClientError && error.code === "TIMEOUT" ? 504 : 502;
           response.status(status).json({
             success: false,
             error: { code: "UNAVAILABLE", message },

@@ -129,6 +129,7 @@ function LiveVoiceAssistantPage({
     try {
       recorderRef.current?.dispose();
       const handle = await createLiveRecorder({
+        isPaused: () => busyRef.current,
         onPhase: (vad) => {
           if (!busyRef.current) setLivePhase(vad === "hearing" ? "hearing" : "listening");
         },
@@ -137,7 +138,9 @@ function LiveVoiceAssistantPage({
       recorderRef.current = handle;
       setConversation(true);
       setLivePhase("listening");
-      toast.push("Live voice assistant is listening. Speak your question.");
+      toast.push(
+        "Listening. Speak naturally, or hold Hold to talk, then release to send.",
+      );
     } catch {
       setFailure("Microphone access was denied or is unavailable.");
     }
@@ -165,7 +168,7 @@ function LiveVoiceAssistantPage({
       </header>
       <p className="notice notice-info">
         Connected to MongoDB. Audio uploads go through the EchoFloor API; n8n webhooks stay
-        server-side.
+        server-side. If hands-free detection is quiet, use Hold to talk.
       </p>
       <p className="sr-only" aria-live="polite">
         {LIVE_CAPTION[livePhase]}
@@ -194,15 +197,37 @@ function LiveVoiceAssistantPage({
           {!conversation ? (
             <Button onClick={() => void startConversation()}>Start conversation</Button>
           ) : (
-            <Button variant="secondary" onClick={endConversation}>
-              End conversation
-            </Button>
+            <div className="row" style={{ justifyContent: "center" }}>
+              <Button
+                variant="primary"
+                disabled={livePhase === "thinking" || livePhase === "speaking"}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  if (busyRef.current) return;
+                  recorderRef.current?.beginManualCapture();
+                  setLivePhase("hearing");
+                }}
+                onPointerUp={() => {
+                  void recorderRef.current?.endManualCapture();
+                }}
+                onPointerCancel={() => {
+                  void recorderRef.current?.endManualCapture();
+                }}
+              >
+                Hold to talk
+              </Button>
+              <Button variant="secondary" onClick={endConversation}>
+                End
+              </Button>
+            </div>
           )}
           <div className="voice-mic-status">
             <strong>{LIVE_CAPTION[livePhase]}</strong>
             <p className="muted">
               {conversation
-                ? "Pause briefly after you finish speaking so EchoFloor can send the clip."
+                ? livePhase === "thinking"
+                  ? "Sending to n8n… keep this tab open."
+                  : "Speak, pause ~1s, or hold Hold to talk then release."
                 : "Start unlocks speech output and opens the microphone."}
             </p>
           </div>

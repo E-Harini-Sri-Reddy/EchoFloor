@@ -80,8 +80,16 @@ export async function postMultipart(
     for (const [key, value] of Object.entries(fields)) {
       form.append(key, value);
     }
-    const blob = new Blob([Uint8Array.from(audio.buffer)], { type: audio.mimetype });
-    form.append("audioFile", blob, audio.filename);
+    // Prefer File so Node's undici sets a proper multipart filename + type.
+    const bytes = Uint8Array.from(audio.buffer);
+    const file = new File([bytes], audio.filename, {
+      type: audio.mimetype || "application/octet-stream",
+    });
+    form.append("audioFile", file);
+
+    console.info(
+      `n8n multipart POST ${url} fields=${Object.keys(fields).join(",")} bytes=${audio.buffer.length}`,
+    );
 
     const response = await fetch(url, {
       method: "POST",
@@ -93,8 +101,21 @@ export async function postMultipart(
     });
     const payload = await parseResponse(response);
     if (!response.ok) {
+      const detail =
+        typeof payload === "string"
+          ? payload.slice(0, 200)
+          : payload && typeof payload === "object" && "message" in payload
+            ? String((payload as { message: unknown }).message).slice(0, 200)
+            : "";
+      console.error(
+        `n8n multipart failed status=${response.status}${detail ? ` message=${detail}` : ""}`,
+      );
       throw new N8nClientError(
-        "n8n rejected the request.",
+        response.status === 403
+          ? "n8n rejected the webhook key (check N8N_WEBHOOK_KEY matches n8n Header Auth)."
+          : detail
+            ? `n8n workflow error: ${detail}`
+            : "n8n rejected the request.",
         "N8N_ERROR",
         response.status,
       );
@@ -105,6 +126,9 @@ export async function postMultipart(
     if (error instanceof Error && error.name === "AbortError") {
       throw new N8nClientError("n8n request timed out.", "TIMEOUT");
     }
+    console.error(
+      `n8n multipart network error: ${error instanceof Error ? error.message : "unknown"}`,
+    );
     throw new N8nClientError("Could not reach n8n.", "UNAVAILABLE");
   } finally {
     clearTimeout(timeout);
