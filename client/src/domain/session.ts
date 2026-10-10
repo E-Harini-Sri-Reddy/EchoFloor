@@ -14,5 +14,6 @@ export function sessionFromMembership(user: User, membership: Membership): Sessi
     displayName: user.displayName,
     email: user.email,
     demo: true,
+    live: false,
   };
 }

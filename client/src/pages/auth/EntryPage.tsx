@@ -5,9 +5,13 @@ import { Field, TextInput } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
 import { homePathForSession } from "@/domain/access";
 import { GoogleSignInButton } from "@/features/auth/GoogleSignInButton";
-import { DEMO_ACCOUNTS, DEMO_PASSWORD } from "@/fixtures/seed";
 import { useDemoDatabase } from "@/hooks/useDemo";
-import { demoStore } from "@/services/demoStore";
+import {
+  apiGoogleSession,
+  apiLogin,
+  apiRegister,
+} from "@/services/apiClient";
+import { demoStore, isLiveDataMode } from "@/services/demoStore";
 import { isGoogleOAuthConfigured, type GoogleVerifiedIdentity } from "@/services/googleAuth";
 import { isEmail } from "@/utils/format";
 
@@ -17,6 +21,7 @@ export function EntryPage() {
   const db = useDemoDatabase();
   const navigate = useNavigate();
   const toast = useToast();
+  const live = isLiveDataMode();
   const [tab, setTab] = useState<AuthTab>("signin");
   const [showPassword, setShowPassword] = useState(false);
   const [login, setLogin] = useState({ email: "", password: "" });
@@ -31,15 +36,6 @@ export function EntryPage() {
   const [submitting, setSubmitting] = useState<"login" | "register" | null>(null);
   const googleConfigured = isGoogleOAuthConfigured();
 
-  function enter(email: string) {
-    const result = demoStore.login(email);
-    if (!result.ok || !result.db.session) {
-      toast.push(result.ok ? "Sign-in failed." : result.message);
-      return;
-    }
-    navigate(homePathForSession(result.db.session));
-  }
-
   async function onLogin(event: FormEvent) {
     event.preventDefault();
     const errors: Record<string, string> = {};
@@ -48,44 +44,102 @@ export function EntryPage() {
     setLoginErrors(errors);
     if (Object.keys(errors).length > 0) return;
     setSubmitting("login");
-    await wait();
-    const result = demoStore.loginWithPassword(login.email, login.password);
-    setSubmitting(null);
-    if (!result.ok || !result.db.session) {
-      if (result.ok) {
-        setLoginErrors({ password: "Email or password is incorrect." });
-      } else if (result.code === "FORBIDDEN") {
-        setLoginErrors({ password: result.message });
-      } else {
-        const next: Record<string, string> = {};
-        if (result.fieldErrors?.email) next.email = result.fieldErrors.email;
-        if (result.fieldErrors?.password) next.password = result.fieldErrors.password;
-        if (!next.email && !next.password) next.password = result.message;
-        setLoginErrors(next);
+
+    try {
+      if (live) {
+        const result = await apiLogin(login.email, login.password);
+        if (!result.ok) {
+          setLoginErrors(result.fieldErrors ?? { email: result.message });
+          return;
+        }
+        demoStore.hydrateLive(result.data.workspace, result.data.session);
+        navigate(homePathForSession(result.data.session));
+        return;
       }
-      return;
+
+      await wait();
+      const result = demoStore.loginWithPassword(login.email, login.password);
+      if (!result.ok || !result.db.session) {
+        if (result.ok) {
+          setLoginErrors({ password: "Email or password is incorrect." });
+        } else if (result.code === "FORBIDDEN") {
+          setLoginErrors({ password: result.message });
+        } else {
+          const next: Record<string, string> = {};
+          if (result.fieldErrors?.email) next.email = result.fieldErrors.email;
+          if (result.fieldErrors?.password) next.password = result.fieldErrors.password;
+          if (!next.email && !next.password) next.password = result.message;
+          setLoginErrors(next);
+        }
+        return;
+      }
+      navigate(homePathForSession(result.db.session));
+    } finally {
+      setSubmitting(null);
     }
-    navigate(homePathForSession(result.db.session));
   }
 
   async function onRegister(event: FormEvent) {
     event.preventDefault();
     setSubmitting("register");
-    await wait();
-    const result = demoStore.register(register);
-    setSubmitting(null);
-    if (!result.ok) {
-      setRegisterErrors(result.fieldErrors ?? {});
-      return;
+
+    try {
+      if (live) {
+        const result = await apiRegister({
+          organisationName: register.organisationName,
+          displayName: register.displayName,
+          email: register.email,
+          password: register.password,
+        });
+        if (!result.ok) {
+          setRegisterErrors(result.fieldErrors ?? { email: result.message });
+          return;
+        }
+        demoStore.hydrateLive(result.data.workspace, result.data.session);
+        toast.push("Organisation created. You are its administrator.");
+        navigate("/admin");
+        return;
+      }
+
+      await wait();
+      const result = demoStore.register(register);
+      if (!result.ok) {
+        setRegisterErrors(result.fieldErrors ?? {});
+        return;
+      }
+      toast.push(
+        "Organisation created in this browser session. You are its administrator.",
+      );
+      navigate("/admin");
+    } finally {
+      setSubmitting(null);
     }
-    toast.push(
-      "Organisation created in this browser session. You are its administrator.",
-    );
-    navigate("/admin");
   }
 
-  async function onGoogleSignInVerified(identity: GoogleVerifiedIdentity) {
+  async function onGoogleSignInVerified(
+    identity: GoogleVerifiedIdentity,
+    idToken: string,
+  ) {
     setLoginErrors({});
+    if (live) {
+      setSubmitting("login");
+      try {
+        const result = await apiGoogleSession(idToken);
+        if (!result.ok) {
+          setLoginErrors({
+            email: result.fieldErrors?.email ?? result.message,
+          });
+          return;
+        }
+        demoStore.hydrateLive(result.data.workspace, result.data.session);
+        toast.push("Signed in with Google.");
+        navigate(homePathForSession(result.data.session));
+      } finally {
+        setSubmitting(null);
+      }
+      return;
+    }
+
     const result = demoStore.loginWithGoogle(identity.email);
     if (!result.ok || !result.db.session) {
       setLoginErrors({
@@ -99,13 +153,38 @@ export function EntryPage() {
     navigate(homePathForSession(result.db.session));
   }
 
-  async function onGoogleRegisterVerified(identity: GoogleVerifiedIdentity) {
+  async function onGoogleRegisterVerified(
+    identity: GoogleVerifiedIdentity,
+    _idToken: string,
+  ) {
     const errors: Record<string, string> = {};
     if (register.organisationName.trim().length < 2) {
       errors.organisationName = "Enter the organisation name before continuing with Google.";
     }
     setRegisterErrors(errors);
     if (Object.keys(errors).length > 0) return;
+
+    if (live) {
+      setSubmitting("register");
+      try {
+        const result = await apiRegister({
+          organisationName: register.organisationName,
+          displayName: register.displayName.trim() || identity.name || identity.email,
+          email: identity.email,
+          viaGoogle: true,
+        });
+        if (!result.ok) {
+          setRegisterErrors(result.fieldErrors ?? { email: result.message });
+          return;
+        }
+        demoStore.hydrateLive(result.data.workspace, result.data.session);
+        toast.push("Organisation created with Google. You are its administrator.");
+        navigate("/admin");
+      } finally {
+        setSubmitting(null);
+      }
+      return;
+    }
 
     const result = demoStore.registerWithGoogle({
       organisationName: register.organisationName,
@@ -144,40 +223,14 @@ export function EntryPage() {
           </ul>
         </div>
         <p>
-          {googleConfigured
-            ? "Google ID tokens are verified by the EchoFloor API."
-            : "Development preview. Set Google OAuth client IDs in .env to enable Google sign-in."}
+          {live
+            ? "Signed-in sessions load organisation records from MongoDB."
+            : googleConfigured
+              ? "Google ID tokens are verified by the EchoFloor API."
+              : "Development preview. Set Google OAuth client IDs in .env to enable Google sign-in."}
         </p>
       </section>
       <main className="auth-main">
-        <div className="auth-dev-bar">
-          <strong>Dev entry</strong>
-          <p>
-            Password <span className="mono">{DEMO_PASSWORD}</span>
-            {googleConfigured ? " · Google ID tokens verified by API" : " · Google unset"}
-          </p>
-          <div className="auth-dev-actions">
-            {DEMO_ACCOUNTS.map((account) => (
-              <Button
-                key={account.email}
-                variant="secondary"
-                onClick={() => enter(account.email)}
-              >
-                {account.roleLabel}: {account.name.split(" ")[0]}
-              </Button>
-            ))}
-            <Button
-              variant="tertiary"
-              onClick={() => {
-                demoStore.reset();
-                toast.push("Example records were reset in this browser session.");
-              }}
-            >
-              Reset
-            </Button>
-          </div>
-        </div>
-
         <div className="auth-card card">
           <div className="auth-tabs" role="tablist" aria-label="Authentication">
             <button
@@ -362,7 +415,9 @@ export function EntryPage() {
         </div>
 
         <p className="muted auth-main-foot">
-          Session records in this tab: {db.organisations.length} organisations.{" "}
+          {live
+            ? "Live mode: sign-in loads machines and other records from MongoDB. "
+            : `Session records in this tab: ${db.organisations.length} organisations. `}
           <Link to="/access-denied">Preview the access-denied state</Link>.
         </p>
       </main>

@@ -13,8 +13,7 @@ import {
   labelRole,
   labelWorkerAccessType,
 } from "@/domain/labels";
-import { machinesFor, memberRows } from "@/domain/queries";
-import { MachineForm } from "@/features/machines/MachineForm";
+import { memberRows } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import {
   fetchHealth,
@@ -37,7 +36,6 @@ export function SettingsPage({ role }: { role: "admin" | "worker" }) {
       ? [
           ["organisation", "Organisation"],
           ["members", "Members"],
-          ["machines", "Machines and NFC"],
           ["account", "Account"],
           ["integrations", "Integrations"],
         ]
@@ -74,7 +72,6 @@ export function SettingsPage({ role }: { role: "admin" | "worker" }) {
       </div>
       {section === "organisation" && role === "admin" ? <OrganisationSettings /> : null}
       {section === "members" && role === "admin" ? <MemberSettings /> : null}
-      {section === "machines" && role === "admin" ? <MachineSettings /> : null}
       {section === "account" ? <AccountSettings /> : null}
       {section === "notifications" && role === "worker" ? (
         <AccountSettings notificationsOnly />
@@ -494,41 +491,6 @@ function MemberAccessEditor({
   );
 }
 
-function MachineSettings() {
-  const db = useDemoDatabase();
-  const session = db.session;
-  const [editing, setEditing] = useState<string | null>(null);
-  if (!session) return null;
-  const machines = machinesFor(db, session.organisationId);
-  return (
-    <div className="stack">
-      <MachineForm />
-      {machines.map((machine) => (
-        <article key={machine.id} className="card stack">
-          <div className="spread">
-            <strong>
-              <span className="mono">{machine.machineCode}</span> — {machine.name}
-            </strong>
-            <Button
-              variant="secondary"
-              onClick={() => setEditing(editing === machine.id ? null : machine.id)}
-            >
-              {editing === machine.id ? "Close" : "Edit"}
-            </Button>
-          </div>
-          <span className="muted">
-            NFC{" "}
-            {machine.nfc.enabled && machine.nfc.tagId
-              ? machine.nfc.tagId
-              : "not configured"}
-          </span>
-          {editing === machine.id ? <MachineForm machine={machine} /> : null}
-        </article>
-      ))}
-    </div>
-  );
-}
-
 function AccountSettings({ notificationsOnly = false }: { notificationsOnly?: boolean }) {
   const db = useDemoDatabase();
   const session = db.session;
@@ -633,7 +595,9 @@ function IntegrationSettings() {
         if (!cancelled) {
           setHealth(null);
           setError(
-            "The API is not reachable. Operational pages still use browser-session fixtures, and integrations are treated as unavailable.",
+            getClientConfig().dataSource === "api"
+              ? "The API is not reachable. Sign-in and organisation data cannot load from MongoDB until it is back."
+              : "The API is not reachable. Operational pages still use browser-session fixtures, and integrations are treated as unavailable.",
           );
         }
       })

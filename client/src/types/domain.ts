@@ -404,8 +404,13 @@ export interface Session {
   accessExpiresAt: string | null;
   displayName: string;
   email: string;
-  /** Development-only session. This is not a server authentication token. */
-  demo: true;
+  /**
+   * true = browser-session fixtures; false = authenticated against the API/MongoDB.
+   * This is not a server JWT.
+   */
+  demo: boolean;
+  /** true when workspace rows were loaded from MongoDB. */
+  live?: boolean;
 }
 
 export interface DemoFlags {

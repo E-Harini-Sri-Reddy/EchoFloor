@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { Button, ButtonLink } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
 import { EmptyState } from "@/components/ui/States";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -20,18 +21,20 @@ import {
   unresolvedMemories,
   userById,
 } from "@/domain/queries";
+import { MachineForm } from "@/features/machines/MachineForm";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { formatTimestamp } from "@/utils/format";
-import { ButtonLink } from "@/components/ui/Button";
 
 export function MachineListPage({ role }: { role: "admin" | "worker" }) {
   const db = useDemoDatabase();
   const session = db.session;
   const [text, setText] = useState("");
   const [line, setLine] = useState("all");
+  const [showAdd, setShowAdd] = useState(false);
   if (!session) return null;
   const base = role === "admin" ? "/admin" : "/worker";
-  const machines = machinesFor(db, session.organisationId).filter((machine) => {
+  const orgMachines = machinesFor(db, session.organisationId);
+  const machines = orgMachines.filter((machine) => {
     const haystack = `${machine.machineCode} ${machine.name}`.toLowerCase();
     const matchesText = haystack.includes(text.trim().toLowerCase());
     const matchesLine =
@@ -40,7 +43,7 @@ export function MachineListPage({ role }: { role: "admin" | "worker" }) {
   });
   const lines = [
     ...new Set(
-      machinesFor(db, session.organisationId)
+      orgMachines
         .map((machine) => machine.location.productionLine)
         .filter((value): value is string => Boolean(value)),
     ),
@@ -48,6 +51,7 @@ export function MachineListPage({ role }: { role: "admin" | "worker" }) {
   const memories = db.memories.filter(
     (memory) => memory.organisationId === session.organisationId,
   );
+  const addOpen = showAdd || (role === "admin" && orgMachines.length === 0);
 
   return (
     <div className="page">
@@ -58,7 +62,22 @@ export function MachineListPage({ role }: { role: "admin" | "worker" }) {
             Search by identifier or name. Record status is not a live health reading.
           </p>
         </div>
+        {role === "admin" && orgMachines.length > 0 ? (
+          <Button
+            variant={addOpen ? "secondary" : "primary"}
+            onClick={() => setShowAdd((value) => !value)}
+          >
+            {addOpen ? "Hide add form" : "Add a machine"}
+          </Button>
+        ) : null}
       </header>
+      {role === "admin" && addOpen ? (
+        <MachineForm
+          onSaved={() => {
+            if (orgMachines.length > 0) setShowAdd(false);
+          }}
+        />
+      ) : null}
       <div className="filter-bar">
         <Field label="Search machines" htmlFor="machine-search">
           <TextInput
@@ -87,14 +106,9 @@ export function MachineListPage({ role }: { role: "admin" | "worker" }) {
         <EmptyState
           title="No machines match"
           message={
-            machinesFor(db, session.organisationId).length === 0
-              ? "This organisation has no machines yet."
+            orgMachines.length === 0
+              ? "This organisation has no machines yet. Register one above."
               : "Try a different identifier, name, or line."
-          }
-          action={
-            role === "admin" ? (
-              <ButtonLink to="/admin/settings">Add a machine in Settings</ButtonLink>
-            ) : undefined
           }
         />
       ) : (
@@ -143,6 +157,7 @@ export function MachineDetailPage({ role }: { role: "admin" | "worker" }) {
   const { machineId = "" } = useParams();
   const db = useDemoDatabase();
   const session = db.session;
+  const [editing, setEditing] = useState(false);
   const now = useMemo(() => new Date(), []);
   if (!session) return null;
   const machine = machineById(db, session.organisationId, machineId);
@@ -194,6 +209,11 @@ export function MachineDetailPage({ role }: { role: "admin" | "worker" }) {
             status={machine.status}
             label={labelMachineStatus(machine.status)}
           />
+          {role === "admin" ? (
+            <Button variant="secondary" onClick={() => setEditing((value) => !value)}>
+              {editing ? "Close editor" : "Edit machine"}
+            </Button>
+          ) : null}
           <ButtonLink to={`${base}/report-issue?machine=${machine.id}`} variant="secondary">
             Report issue
           </ButtonLink>
@@ -202,6 +222,13 @@ export function MachineDetailPage({ role }: { role: "admin" | "worker" }) {
           </ButtonLink>
         </div>
       </header>
+      {role === "admin" && editing ? (
+        <MachineForm
+          machine={machine}
+          onSaved={() => setEditing(false)}
+          onCancel={() => setEditing(false)}
+        />
+      ) : null}
       <div className="notice">
         Example machine context. EchoFloor is not reporting live pressure, speed, or
         health.

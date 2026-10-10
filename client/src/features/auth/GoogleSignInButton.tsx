@@ -10,7 +10,10 @@ import {
 interface GoogleSignInButtonProps {
   mode: "signin" | "signup";
   disabled?: boolean;
-  onVerified: (identity: GoogleVerifiedIdentity) => void | Promise<void>;
+  onVerified: (
+    identity: GoogleVerifiedIdentity,
+    idToken: string,
+  ) => void | Promise<void>;
   onError: (message: string) => void;
 }
 
@@ -43,7 +46,7 @@ export function GoogleSignInButton({
               setBusy(true);
               try {
                 const identity = await verifyGoogleIdToken(response.credential);
-                await handlersRef.current.onVerified(identity);
+                await handlersRef.current.onVerified(identity, response.credential);
               } catch (error) {
                 handlersRef.current.onError(
                   error instanceof Error

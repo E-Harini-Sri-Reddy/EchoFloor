@@ -167,6 +167,7 @@ export function registerOrganisation(
     displayName: input.displayName.trim(),
     email,
     demo: true,
+    live: false,
   };
 
   const nextDb = setCredential(

@@ -7,7 +7,7 @@ import { loadConfig } from "./config/env.js";
 
 test("health reports missing integrations without throwing", async () => {
   const config = loadConfig({ NODE_ENV: "test", CLIENT_URL: "http://localhost:5173" });
-  const app = createApp(config);
+  const app = await createApp(config);
   const server = app.listen(0);
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -40,7 +40,7 @@ test("health reports missing integrations without throwing", async () => {
 
 test("google auth reports unavailable when client id is missing", async () => {
   const config = loadConfig({ NODE_ENV: "test", CLIENT_URL: "http://localhost:5173" });
-  const app = createApp(config);
+  const app = await createApp(config);
   const server = app.listen(0);
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -66,7 +66,7 @@ test("google auth reports unavailable when client id is missing", async () => {
 
 test("unknown routes return a consistent error", async () => {
   const config = loadConfig({ NODE_ENV: "test", CLIENT_URL: "http://localhost:5173" });
-  const app = createApp(config);
+  const app = await createApp(config);
   const server = app.listen(0);
   await once(server, "listening");
   const address = server.address() as AddressInfo;

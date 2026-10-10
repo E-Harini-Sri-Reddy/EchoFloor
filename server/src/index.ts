@@ -8,7 +8,7 @@ const serverDir = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.resolve(serverDir, "../../.env");
 dotenv.config({ path: envPath });
 
-function start() {
+async function start() {
   let config;
   try {
     config = loadConfig();
@@ -26,7 +26,7 @@ function start() {
     );
   }
 
-  const app = createApp(config);
+  const app = await createApp(config);
   app.listen(config.port, () => {
     console.info(
       `EchoFloor API listening on port ${config.port}. Health: ${config.apiPrefix}/health`,
@@ -34,4 +34,4 @@ function start() {
   });
 }
 
-start();
+void start();

@@ -18,7 +18,6 @@ import {
 } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { formatTimestamp } from "@/utils/format";
-import { MachineForm } from "@/features/machines/MachineForm";
 
 export function AdminOverviewPage() {
   const db = useDemoDatabase();
@@ -55,10 +54,10 @@ export function AdminOverviewPage() {
         </header>
         <ol className="card stack">
           <li>Organisation {organisation?.name} is active. You are the administrator.</li>
-          <li>Add the first machine. An NFC tag is optional.</li>
+          <li>Add the first machine from Machine Details. An NFC tag is optional.</li>
           <li>Invite workers from Settings. They receive worker access.</li>
         </ol>
-        <MachineForm />
+        <ButtonLink to="/admin/machines">Go to Machine Details</ButtonLink>
       </div>
     );
   }

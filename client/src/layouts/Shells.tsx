@@ -13,7 +13,6 @@ import {
 } from "@/domain/notifications";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { demoStore } from "@/services/demoStore";
-import { getClientConfig } from "@/services/clientConfig";
 import { ErrorState, LoadingState } from "@/components/ui/States";
 
 interface NavItem {
@@ -130,15 +129,6 @@ function Shell({
 
   if (!session) return null;
 
-  if (getClientConfig().dataSource === "api") {
-    return (
-      <ErrorState
-        title="Operational API is not connected"
-        message="VITE_DATA_SOURCE is set to api, but this server does not serve organisation data yet. Set it back to mock to review the labeled demonstration interface. Nothing here is being presented as live factory data."
-      />
-    );
-  }
-
   const organisation = db.organisations.find(
     (item) => item.id === session.organisationId,
   );
@@ -187,7 +177,6 @@ function Shell({
           {session.workerAccessType === "temporary" && session.accessExpiresAt ? (
             <p>Access ends {new Date(session.accessExpiresAt).toLocaleString()}</p>
           ) : null}
-          <p>Browser-session fixtures. Not a live plant connection.</p>
         </div>
       </aside>
       <div className="shell-main">

@@ -38,34 +38,70 @@ import {
   type ReportMachineIssueInput,
   type UpdateShiftPolicyInput,
 } from "@/domain/operations";
+import { getClientConfig } from "@/services/clientConfig";
 import type {
   DemoDatabase,
   EditableMemory,
   FieldChange,
   MembershipRole,
+  Session,
   TaskStatus,
   WorkerAccessType,
 } from "@/types/domain";
 
 const STORAGE_KEY = "echofloor.demo.v6";
+const LIVE_SESSION_KEY = "echofloor.live.session";
 
 let database = readInitial();
 const listeners = new Set<() => void>();
 
+export function emptyLiveShell(): DemoDatabase {
+  return {
+    organisations: [],
+    users: [],
+    memberships: [],
+    invitations: [],
+    machines: [],
+    memories: [],
+    revisions: [],
+    constraints: [],
+    shifts: [],
+    assignments: [],
+    handovers: [],
+    alerts: [],
+    tasks: [],
+    auditEvents: [],
+    preferences: {},
+    credentials: {},
+    session: null,
+    flags: { forceLoadError: false },
+    selectedMachineId: null,
+  };
+}
+
 function readInitial(): DemoDatabase {
+  const liveMode =
+    typeof import.meta !== "undefined" && getClientConfig().dataSource === "api";
   if (typeof sessionStorage === "undefined") {
-    return createSeed();
+    return liveMode ? emptyLiveShell() : createSeed();
   }
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return createSeed();
+    if (!raw) return liveMode ? emptyLiveShell() : createSeed();
     const parsed = JSON.parse(raw) as DemoDatabase;
     if (
       !parsed ||
       !Array.isArray(parsed.organisations) ||
       !Array.isArray(parsed.memories)
     ) {
-      return createSeed();
+      return liveMode ? emptyLiveShell() : createSeed();
+    }
+    if (liveMode) {
+      // Fixture sessions must not masquerade as Mongo-backed org data.
+      if (!parsed.session?.live) {
+        return emptyLiveShell();
+      }
+      return parsed;
     }
     const seed = createSeed();
     if (!Array.isArray(parsed.tasks)) {
@@ -85,7 +121,7 @@ function readInitial(): DemoDatabase {
     }));
     return parsed;
   } catch {
-    return createSeed();
+    return liveMode ? emptyLiveShell() : createSeed();
   }
 }
 
@@ -93,8 +129,31 @@ function commit(next: DemoDatabase) {
   database = next;
   if (typeof sessionStorage !== "undefined") {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(database));
+    if (next.session?.live) {
+      sessionStorage.setItem(
+        LIVE_SESSION_KEY,
+        JSON.stringify({
+          userId: next.session.userId,
+          organisationId: next.session.organisationId,
+        }),
+      );
+    } else if (!next.session) {
+      sessionStorage.removeItem(LIVE_SESSION_KEY);
+    }
   }
   listeners.forEach((listener) => listener());
+}
+
+export function isLiveDataMode() {
+  return getClientConfig().dataSource === "api";
+}
+
+export function hydrateFromWorkspace(workspace: DemoDatabase, session: Session) {
+  commit({
+    ...workspace,
+    session: { ...session, demo: false, live: true },
+    flags: { forceLoadError: false },
+  });
 }
 
 export function getDatabase(): DemoDatabase {
@@ -109,8 +168,9 @@ export function subscribe(listener: () => void): () => void {
 export function resetDemoDatabase() {
   if (typeof sessionStorage !== "undefined") {
     sessionStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(LIVE_SESSION_KEY);
   }
-  commit(createSeed());
+  commit(isLiveDataMode() ? emptyLiveShell() : createSeed());
 }
 
 function apply<T extends { ok: true; db: DemoDatabase } | { ok: false }>(result: T): T {
@@ -137,11 +197,20 @@ export const demoStore = {
   loginWithPassword: (email: string, password: string) =>
     apply(loginWithPassword(database, email, password)),
   loginWithGoogle: (email: string) => apply(loginWithGoogle(database, email)),
-  logout: () => commit(logout(database)),
+  logout: () => {
+    if (isLiveDataMode()) {
+      commit(emptyLiveShell());
+      return;
+    }
+    commit(logout(database));
+  },
   reset: resetDemoDatabase,
   setForceLoadError: (value: boolean) => commit(setForceLoadError(database, value)),
   selectMachine: (machineId: string | null) => apply(selectMachine(database, machineId)),
   createMachine: (input: MachineInput) => apply(createMachine(database, input)),
+  /** Replace local store with a MongoDB workspace snapshot. */
+  hydrateLive: (workspace: DemoDatabase, session: Session) =>
+    hydrateFromWorkspace(workspace, session),
   updateMachine: (machineId: string, input: MachineInput) =>
     apply(updateMachine(database, machineId, input)),
   updateOrganisation: (input: { name: string; timezone: string }) =>

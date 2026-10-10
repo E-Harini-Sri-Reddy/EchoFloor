@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
-import type { Machine } from "@/types/domain";
+import { useDemoDatabase } from "@/hooks/useDemo";
+import { apiCreateMachine, apiUpdateMachine } from "@/services/apiClient";
 import { demoStore } from "@/services/demoStore";
+import type { Machine } from "@/types/domain";
 
 const empty = {
   machineCode: "",
@@ -15,27 +17,71 @@ const empty = {
   nfcTagId: "",
 };
 
-export function MachineForm({ machine }: { machine?: Machine }) {
+function valuesFromMachine(machine: Machine) {
+  return {
+    machineCode: machine.machineCode,
+    name: machine.name,
+    description: machine.description ?? "",
+    productionLine: machine.location.productionLine ?? "",
+    area: machine.location.area ?? "",
+    machineType: machine.machineType ?? "",
+    nfcTagId: machine.nfc.tagId ?? "",
+  };
+}
+
+export function MachineForm({
+  machine,
+  onSaved,
+  onCancel,
+}: {
+  machine?: Machine;
+  onSaved?: () => void;
+  onCancel?: () => void;
+}) {
   const toast = useToast();
-  const [values, setValues] = useState(
-    machine
-      ? {
-          machineCode: machine.machineCode,
-          name: machine.name,
-          description: machine.description ?? "",
-          productionLine: machine.location.productionLine ?? "",
-          area: machine.location.area ?? "",
-          machineType: machine.machineType ?? "",
-          nfcTagId: machine.nfc.tagId ?? "",
-        }
-      : empty,
-  );
+  const session = useDemoDatabase().session;
+  const [values, setValues] = useState(machine ? valuesFromMachine(machine) : empty);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setValues(machine ? valuesFromMachine(machine) : empty);
+    setErrors({});
+  }, [machine?.id, machine?.updatedAt]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
+
+    if (session?.live) {
+      const workspace = machine
+        ? await apiUpdateMachine(machine.id, {
+            organisationId: session.organisationId,
+            updatedBy: session.userId,
+            ...values,
+          })
+        : await apiCreateMachine({
+            organisationId: session.organisationId,
+            createdBy: session.userId,
+            ...values,
+          });
+      setSaving(false);
+      if (!workspace) {
+        toast.push(
+          machine
+            ? "Could not update the machine in the database."
+            : "Could not save the machine to the database.",
+        );
+        return;
+      }
+      demoStore.hydrateLive(workspace, session);
+      setErrors({});
+      if (!machine) setValues(empty);
+      toast.push(machine ? "Machine updated in the database." : "Machine saved to the database.");
+      onSaved?.();
+      return;
+    }
+
     await new Promise((resolve) => window.setTimeout(resolve, 300));
     const result = machine
       ? demoStore.updateMachine(machine.id, values)
@@ -53,6 +99,7 @@ export function MachineForm({ machine }: { machine?: Machine }) {
         : "Machine saved in this browser session. It was not written to MongoDB.",
     );
     if (!machine) setValues(empty);
+    onSaved?.();
   }
 
   function set<K extends keyof typeof values>(key: K, value: string) {
@@ -123,9 +170,16 @@ export function MachineForm({ machine }: { machine?: Machine }) {
           onChange={(event) => set("description", event.target.value)}
         />
       </Field>
-      <Button type="submit" loading={saving}>
-        {machine ? "Save machine" : "Register machine"}
-      </Button>
+      <div className="row">
+        <Button type="submit" loading={saving}>
+          {machine ? "Save machine" : "Register machine"}
+        </Button>
+        {onCancel ? (
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+        ) : null}
+      </div>
     </form>
   );
 }

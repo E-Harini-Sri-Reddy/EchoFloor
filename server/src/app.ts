@@ -2,8 +2,15 @@ import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
 import { GoogleAuthError, verifyGoogleIdToken } from "./auth/google.js";
 import { integrationReport, type AppConfig } from "./config/env.js";
+import { connectMongo, getDb } from "./db/mongo.js";
+import { registerWorkspaceRoutes } from "./routes/workspace.js";
 
-export function createApp(config: AppConfig) {
+export async function createApp(config: AppConfig) {
+  await connectMongo(config).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : "MongoDB connection failed.";
+    console.error(`EchoFloor MongoDB connection error: ${message}`);
+  });
+
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
@@ -26,6 +33,7 @@ export function createApp(config: AppConfig) {
 
   app.get(`${config.apiPrefix}/health`, (_request, response) => {
     const integrations = integrationReport(config);
+    const mongoReady = Boolean(getDb());
     response.json({
       success: true,
       data: {
@@ -33,9 +41,11 @@ export function createApp(config: AppConfig) {
         service: "echofloor-api",
         environment: config.nodeEnv,
         integrations,
-        dataApi: "not_implemented",
+        dataApi: mongoReady ? "mongodb" : "not_implemented",
         googleClientIdConfigured: Boolean(config.googleClientId),
-        note: "This milestone validates configuration and reports integration availability. Organisation data is not served by the API. The frontend mockup uses labeled browser-session fixtures when VITE_DATA_SOURCE=mock. Google ID tokens are verified when GOOGLE_CLIENT_ID is set.",
+        note: mongoReady
+          ? "Organisation workspace data is served from MongoDB when clients use VITE_DATA_SOURCE=api."
+          : "MongoDB is not connected. Organisation data is not served until MONGODB_URI is set.",
       },
     });
   });
@@ -72,6 +82,8 @@ export function createApp(config: AppConfig) {
       next(error);
     }
   });
+
+  registerWorkspaceRoutes(app, config);
 
   app.use((_request, response) => {
     response.status(404).json({
