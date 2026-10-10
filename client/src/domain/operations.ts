@@ -1233,6 +1233,102 @@ export function resolveAlert(db: DemoDatabase, alertId: string): OperationResult
   };
 }
 
+function isOverheatingAlert(alert: Alert): boolean {
+  if (alert.issueKind === "overheating") return true;
+  if (alert.severity === "critical" && alert.type === "machine_hazard") return true;
+  return /overheat/i.test(alert.title) || /overheat/i.test(alert.message);
+}
+
+/**
+ * Worker voice MVP: clear overheating Live Alerts for a machine and write a resolution log.
+ */
+export function resolveOverheatingByVoice(
+  db: DemoDatabase,
+  machineId: string,
+): OperationResult<{ message: string; removedAlertIds: string[]; memoryId: string }> {
+  const session = db.session;
+  if (!session) return fail("FORBIDDEN", "Sign in is required.");
+  if (session.role !== "worker" && session.role !== "admin") {
+    return fail("FORBIDDEN", "Only organisation members can resolve overheating by voice.");
+  }
+  const machine = machineById(db, session.organisationId, machineId);
+  if (!machine) return fail("NOT_FOUND", "Machine not found.");
+  const toRemove = db.alerts.filter(
+    (alert) =>
+      alert.organisationId === session.organisationId &&
+      alert.machineId === machineId &&
+      alert.status !== "resolved" &&
+      alert.status !== "dismissed" &&
+      isOverheatingAlert(alert),
+  );
+  const now = new Date().toISOString();
+  const memoryId = newId("mem");
+  const logTitle = `Overheating issue solved by ${session.displayName}`;
+  const logContent = `${session.displayName} cleared the overheating hold on ${machine.machineCode} via Voice Assistant. Database record updated.`;
+  const memory: MemoryRecord = {
+    id: memoryId,
+    organisationId: session.organisationId,
+    machineId,
+    type: "incident",
+    title: logTitle,
+    content: logContent,
+    summary: logTitle,
+    status: "verified",
+    source: { type: "voice", submittedBy: session.userId },
+    tags: ["overheating", "voice", "resolved"],
+    currentRevision: 1,
+    example: false,
+    createdBy: session.userId,
+    createdAt: now,
+    updatedAt: now,
+    verifiedAt: now,
+  };
+  const message = `Database record updated. New log created: Overheating issue solved by ${session.displayName}`;
+  return {
+    ok: true,
+    data: {
+      message,
+      removedAlertIds: toRemove.map((alert) => alert.id),
+      memoryId,
+    },
+    db: {
+      ...db,
+      alerts: db.alerts.filter((alert) => !toRemove.some((item) => item.id === alert.id)),
+      memories: [memory, ...db.memories],
+      revisions: [
+        {
+          id: newId("rev"),
+          organisationId: session.organisationId,
+          memoryId,
+          revisionNumber: 1,
+          snapshot: {
+            type: memory.type,
+            title: memory.title,
+            content: memory.content,
+            summary: memory.summary,
+            status: memory.status,
+            tags: memory.tags,
+          },
+          changeSummary: "Voice resolution log",
+          changedBy: session.userId,
+          createdAt: now,
+        },
+        ...db.revisions,
+      ],
+      auditEvents: [
+        ...db.auditEvents,
+        audit(
+          session,
+          "alert.voice_resolve_overheating",
+          "machine",
+          machineId,
+          message,
+        ),
+      ],
+    },
+  };
+}
+
 /** Administrator decision on AI false-report screening for an issue photo. */
 export function reviewIssuePhotoAi(
   db: DemoDatabase,

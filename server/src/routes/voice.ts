@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import multer from "multer";
+import { ObjectId } from "mongodb";
 import type { AppConfig } from "../config/env.js";
 import { asObjectId, toId } from "../db/ids.js";
 import { getDb } from "../db/mongo.js";
@@ -212,6 +213,124 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
         response.status(202).json({
           success: true,
           data: { requestId, status: "pending" },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  app.post(
+    `${prefix}/resolve-overheating`,
+    requireLiveSession,
+    async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        const session = request.liveSession;
+        if (!session) return;
+        const db = getDb();
+        if (!db) {
+          response.status(503).json({
+            success: false,
+            error: { code: "UNAVAILABLE", message: "MongoDB is not connected." },
+          });
+          return;
+        }
+        if (session.role !== "worker" && session.role !== "admin") {
+          response.status(403).json({
+            success: false,
+            error: { code: "FORBIDDEN", message: "Not allowed." },
+          });
+          return;
+        }
+        const machineIdRaw = String(request.body?.machineId ?? "").trim();
+        const machineId = asObjectId(machineIdRaw);
+        const organisationId = asObjectId(session.organisationId);
+        const userId = asObjectId(session.userId);
+        if (!machineId || !organisationId || !userId) {
+          response.status(400).json({
+            success: false,
+            error: { code: "VALIDATION", message: "machineId is required." },
+          });
+          return;
+        }
+        const machine = await db.collection("machines").findOne({
+          _id: machineId,
+          organisationId,
+        });
+        if (!machine) {
+          response.status(404).json({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Machine not found." },
+          });
+          return;
+        }
+        const user = await db.collection("users").findOne({ _id: userId });
+        const workerName = String(user?.displayName ?? "Worker");
+        const orgIdString = toId(organisationId);
+        const machineIdString = toId(machineId);
+        const overheatingFilter = {
+          status: { $nin: ["resolved", "dismissed"] },
+          $and: [
+            {
+              $or: [
+                { organisationId },
+                { organisationIdString: orgIdString },
+              ],
+            },
+            {
+              $or: [{ machineId }, { machineIdString }],
+            },
+            {
+              $or: [
+                { issueKind: "overheating" },
+                { title: { $regex: "overheat", $options: "i" } },
+                { message: { $regex: "overheat", $options: "i" } },
+                { severity: "critical", type: "machine_hazard" },
+              ],
+            },
+          ],
+        };
+        const doomed = await db.collection("alerts").find(overheatingFilter).toArray();
+        if (doomed.length > 0) {
+          await db.collection("alerts").deleteMany({
+            _id: { $in: doomed.map((row) => row._id) },
+          });
+        }
+        const now = new Date();
+        const memoryId = new ObjectId();
+        const logTitle = `Overheating issue solved by ${workerName}`;
+        const logContent = `${workerName} cleared the overheating hold on ${String(machine.machineCode)} via Voice Assistant. Database record updated.`;
+        await db.collection("memories").insertOne({
+          _id: memoryId,
+          organisationId,
+          machineId,
+          organisationIdString: toId(organisationId),
+          machineIdString: toId(machineId),
+          type: "incident",
+          title: logTitle,
+          content: logContent,
+          summary: logTitle,
+          text: `${logTitle}. ${logContent}`,
+          status: "verified",
+          source: { type: "voice", submittedBy: userId },
+          tags: ["overheating", "voice", "resolved"],
+          currentRevision: 1,
+          example: false,
+          embeddingStatus: "pending",
+          contentVersion: 1,
+          createdBy: userId,
+          createdAt: now,
+          updatedAt: now,
+          verifiedAt: now,
+        });
+        const message = `Database record updated. New log created: Overheating issue solved by ${workerName}`;
+        response.json({
+          success: true,
+          data: {
+            message,
+            removedCount: doomed.length,
+            memoryId: toId(memoryId),
+          },
         });
       } catch (error) {
         next(error);

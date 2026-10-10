@@ -73,6 +73,37 @@ async function parseBody<T>(response: Response): Promise<{ status: number; body:
   return { status: response.status, body };
 }
 
+export async function resolveOverheatingByVoiceApi(
+  session: LiveSessionIds,
+  machineId: string,
+): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const { apiBaseUrl } = getClientConfig();
+  try {
+    const response = await fetch(`${apiBaseUrl}/voice/resolve-overheating`, {
+      method: "POST",
+      headers: {
+        ...sessionHeaders(session),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        machineId,
+        userId: session.userId,
+        organisationId: session.organisationId,
+      }),
+    });
+    const { body } = await parseBody<{ message: string }>(response);
+    if (!response.ok || !body.success || !body.data?.message) {
+      return {
+        ok: false,
+        message: body.error?.message ?? "Could not update the overheating record.",
+      };
+    }
+    return { ok: true, message: body.data.message };
+  } catch {
+    return { ok: false, message: "Cannot reach the EchoFloor API." };
+  }
+}
+
 export async function postVoiceQuestion(
   session: LiveSessionIds,
   input: { machineId: string; audioBlob: Blob; filename?: string },
@@ -146,17 +177,33 @@ export async function getVoiceQuestion(
 export async function pollVoiceQuestion(
   session: LiveSessionIds,
   requestId: string,
-  options?: { intervalMs?: number; maxAttempts?: number },
-): Promise<{ ok: true; data: VoiceQuestionResult } | { ok: false; message: string }> {
+  options?: { intervalMs?: number; maxAttempts?: number; maxWaitMs?: number },
+): Promise<
+  | { ok: true; data: VoiceQuestionResult }
+  | { ok: false; message: string; timedOut?: boolean }
+> {
   const intervalMs = options?.intervalMs ?? 1500;
-  const maxAttempts = options?.maxAttempts ?? 60;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+  const maxWaitMs =
+    options?.maxWaitMs ??
+    (options?.maxAttempts !== undefined
+      ? options.maxAttempts * intervalMs
+      : 30_000);
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
     const result = await getVoiceQuestion(session, requestId);
     if (!result.ok) return result;
     if (!result.pending) return { ok: true, data: result.data };
-    await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, Math.min(intervalMs, remaining)),
+    );
   }
-  return { ok: false, message: "Voice answer timed out while waiting for n8n." };
+  return {
+    ok: false,
+    timedOut: true,
+    message: "Voice answer timed out while waiting for n8n.",
+  };
 }
 
 export async function postVoiceReport(

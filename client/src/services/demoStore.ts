@@ -22,6 +22,7 @@ import {
   registerOrganisationWithGoogle,
   removeShiftAssignment,
   resolveAlert,
+  resolveOverheatingByVoice,
   reviewIssuePhotoAi,
   selectMachine,
   setForceLoadError,
@@ -246,6 +247,8 @@ export const demoStore = {
     apply(updateTaskStatus(database, taskId, status)),
   acknowledgeAlert: (alertId: string) => apply(acknowledgeAlert(database, alertId)),
   resolveAlert: (alertId: string) => apply(resolveAlert(database, alertId)),
+  resolveOverheatingByVoice: (machineId: string) =>
+    apply(resolveOverheatingByVoice(database, machineId)),
   reviewIssuePhotoAi: (alertId: string, decision: "cleared" | "flagged_false") =>
     apply(reviewIssuePhotoAi(database, alertId, decision)),
   generateHandover: () => apply(generateHandover(database)),

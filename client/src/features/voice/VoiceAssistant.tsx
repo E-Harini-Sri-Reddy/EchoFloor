@@ -11,15 +11,22 @@ import {
   suggestReportTitle,
 } from "@/domain/assistant";
 import { labelMemoryStatus } from "@/domain/labels";
-import { machineById, machinesFor, memoriesForMachine } from "@/domain/queries";
+import {
+  liveAlertsFor,
+  machineById,
+  machinesFor,
+  memoriesForMachine,
+} from "@/domain/queries";
 import { buildMachineUsageInsight } from "@/domain/workSummary";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { useSpeech } from "@/hooks/useSpeech";
 import { fetchHealth } from "@/services/clientConfig";
 import { demoStore } from "@/services/demoStore";
+import { apiRefreshWorkspace } from "@/services/apiClient";
 import {
   pollVoiceQuestion,
   postVoiceQuestion,
+  resolveOverheatingByVoiceApi,
   type VoiceEvidenceItem,
 } from "@/services/n8nApi";
 import {
@@ -71,12 +78,147 @@ function LiveVoiceAssistantPage({
     if (requested) setMachineId(requested);
   }, [requested]);
 
+  // Unmount only — do not depend on `speech` or cleanup will kill the mic mid-conversation.
   useEffect(() => {
     return () => {
       speech.cancel();
       recorderRef.current?.dispose();
+      recorderRef.current = null;
     };
-  }, [speech]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount/unmount only
+  }, []);
+
+  function buildLocalFallback(note: string): {
+    text: string;
+    evidence: VoiceEvidenceItem[];
+  } {
+    if (!machine) {
+      return {
+        text: note.trim()
+          ? `No machine selected. ${note.trim()}`
+          : "No machine selected.",
+        evidence: [],
+      };
+    }
+
+    // MVP demo fallback: only Machine 1 (MCH-001) speaks the seeded live-alert script.
+    const isMachineOne = /^mch-?001$/i.test(machine.machineCode.trim());
+    if (isMachineOne) {
+      const alerts = liveAlertsFor(db, session.organisationId, {
+        machineId: machine.id,
+      });
+      const evidence = alerts.slice(0, 4).map((alert) => ({
+        recordId: alert.id,
+        text: alert.message,
+        createdAt: alert.createdAt,
+        machineId: machine.id,
+      }));
+      const hasOverheating = alerts.some(
+        (alert) =>
+          alert.issueKind === "overheating" ||
+          /overheat/i.test(alert.title) ||
+          /overheat/i.test(alert.message),
+      );
+      const hasNeedsAttention = alerts.some(
+        (alert) =>
+          alert.issueKind === "damage" ||
+          /false damage|needs attention|admin approve/i.test(
+            `${alert.title} ${alert.message}`,
+          ),
+      );
+      const lines = [
+        `For ${machine.machineCode}, here is the current error status from Live Alerts.`,
+      ];
+      if (hasOverheating) {
+        lines.push(
+          `Critical: Overheating — do not operate until the alert window ends.`,
+        );
+      }
+      if (hasNeedsAttention) {
+        lines.push(
+          `Warning: Suspected false damage report — an administrator should approve or deny it under Needs attention.`,
+        );
+      }
+      if (alerts.length === 0) {
+        lines.push(`No open live alerts remain for this machine.`);
+      } else {
+        lines.push(
+          `Sample live holds stay visible until each expiresAt window ends.`,
+        );
+      }
+      if (note.trim()) lines.push(note.trim());
+      return { text: lines.join(" "), evidence };
+    }
+
+    const memories = memoriesForMachine(db, session.organisationId, machine.id);
+    const local = answerFromRecords(
+      `What recent history and open issues exist for ${machine.machineCode}?`,
+      machine,
+      memories,
+    );
+    return {
+      text: note.trim() ? `${local.text} ${note.trim()}` : local.text,
+      evidence: local.evidence.map((item) => ({
+        recordId: item.memoryId,
+        text: item.excerpt,
+        createdAt: item.createdAt,
+        machineId: machine.id,
+      })),
+    };
+  }
+
+  async function presentAnswer(text: string, items: VoiceEvidenceItem[]) {
+    setAnswer(text);
+    setEvidence(items);
+    setCaption(text);
+    setFailure("");
+    setLivePhase("speaking");
+    await speech.speakAsync(text);
+    setLivePhase("listening");
+    busyRef.current = false;
+  }
+
+  async function handleWorkerOverheatingResolution() {
+    if (!machine) return false;
+    const isMachineOne = /^mch-?001$/i.test(machine.machineCode.trim());
+    if (role !== "worker" || !isMachineOne) return false;
+
+    const sessionIds = {
+      userId: session.userId,
+      organisationId: session.organisationId,
+    };
+    let message = `Database record updated. New log created: Overheating issue solved by ${session.displayName}`;
+
+    if (session.live) {
+      const remote = await resolveOverheatingByVoiceApi(sessionIds, machine.id);
+      if (!remote.ok) {
+        setFailure(remote.message);
+        setLivePhase("listening");
+        busyRef.current = false;
+        return true;
+      }
+      message = remote.message;
+      // Clear the overheating row in the client store immediately, then resync from API.
+      demoStore.resolveOverheatingByVoice(machine.id);
+      const refreshed = await apiRefreshWorkspace(session.userId);
+      if (refreshed) {
+        demoStore.hydrateLive(refreshed.workspace, refreshed.session);
+      }
+    } else {
+      const local = demoStore.resolveOverheatingByVoice(machine.id);
+      if (!local.ok) {
+        setFailure(local.message);
+        setLivePhase("listening");
+        busyRef.current = false;
+        return true;
+      }
+      message = local.data?.message ?? message;
+    }
+
+    toast.push("Overheating alert removed from Live Alerts.");
+    await presentAnswer(message, []);
+    return true;
+  }
 
   async function handleUtterance(blob: Blob) {
     if (busyRef.current || !machine) return;
@@ -84,35 +226,40 @@ function LiveVoiceAssistantPage({
     setLivePhase("thinking");
     setCaption("");
     setFailure("");
-    const posted = await postVoiceQuestion(
-      { userId: session.userId, organisationId: session.organisationId },
-      { machineId: machine.id, audioBlob: blob, filename: blobFilename(blob) },
-    );
+
+    // Worker + MCH-001 MVP: voice confirms overheating resolved and deletes that alert.
+    if (await handleWorkerOverheatingResolution()) {
+      return;
+    }
+
+    const sessionIds = {
+      userId: session.userId,
+      organisationId: session.organisationId,
+    };
+    const posted = await postVoiceQuestion(sessionIds, {
+      machineId: machine.id,
+      audioBlob: blob,
+      filename: blobFilename(blob),
+    });
     if (!posted.ok) {
-      setFailure(posted.message);
-      setLivePhase("listening");
-      busyRef.current = false;
+      const fallback = buildLocalFallback("");
+      await presentAnswer(fallback.text, fallback.evidence);
       return;
     }
-    const result = posted.pending
-      ? await pollVoiceQuestion(
-          { userId: session.userId, organisationId: session.organisationId },
-          posted.requestId,
-        )
-      : { ok: true as const, data: posted.data };
-    if (!result.ok) {
-      setFailure(result.message);
-      setLivePhase("listening");
-      busyRef.current = false;
+    if (!posted.pending) {
+      await presentAnswer(posted.data.answer, posted.data.evidence);
       return;
     }
-    setAnswer(result.data.answer);
-    setEvidence(result.data.evidence);
-    setCaption(result.data.answer);
-    setLivePhase("speaking");
-    await speech.speakAsync(result.data.answer);
-    setLivePhase("listening");
-    busyRef.current = false;
+    const result = await pollVoiceQuestion(sessionIds, posted.requestId, {
+      maxWaitMs: 30_000,
+      intervalMs: 1500,
+    });
+    if (result.ok) {
+      await presentAnswer(result.data.answer, result.data.evidence);
+      return;
+    }
+    const fallback = buildLocalFallback("");
+    await presentAnswer(fallback.text, fallback.evidence);
   }
 
   async function startConversation() {
@@ -127,7 +274,9 @@ function LiveVoiceAssistantPage({
     }
     speech.unlock();
     try {
-      recorderRef.current?.dispose();
+      const previous = recorderRef.current;
+      recorderRef.current = null;
+      previous?.dispose();
       const handle = await createLiveRecorder({
         isPaused: () => busyRef.current,
         onPhase: (vad) => {
@@ -138,21 +287,35 @@ function LiveVoiceAssistantPage({
       recorderRef.current = handle;
       setConversation(true);
       setLivePhase("listening");
-      toast.push(
-        "Listening. Speak naturally, or hold Hold to talk, then release to send.",
-      );
-    } catch {
-      setFailure("Microphone access was denied or is unavailable.");
+      toast.push("Listening. Use Hold to talk, then Stop Listening to send.");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Microphone access was denied or is unavailable.";
+      setFailure(message);
+      setConversation(false);
+      setLivePhase("idle");
     }
   }
 
   function endConversation() {
     speech.cancel();
-    recorderRef.current?.dispose();
+    const previous = recorderRef.current;
     recorderRef.current = null;
+    previous?.dispose();
     setConversation(false);
     setLivePhase("idle");
     busyRef.current = false;
+  }
+
+  async function onStopListening() {
+    if (busyRef.current) return;
+    const handle = recorderRef.current;
+    if (!handle) {
+      setFailure("Microphone is not active. Tap Start conversation again.");
+      return;
+    }
+    setLivePhase("hearing");
+    await handle.stopListening();
   }
 
   return (
@@ -167,8 +330,8 @@ function LiveVoiceAssistantPage({
         <StatusBadge status="info" label={LIVE_CAPTION[livePhase]} />
       </header>
       <p className="notice notice-info">
-        Connected to MongoDB. Audio uploads go through the EchoFloor API; n8n webhooks stay
-        server-side. If hands-free detection is quiet, use Hold to talk.
+        Speak and pause, or tap Hold to talk then Stop Listening to send. If n8n is slow
+        (&gt;30s), EchoFloor shows matching workspace records so you still get an answer.
       </p>
       <p className="sr-only" aria-live="polite">
         {LIVE_CAPTION[livePhase]}
@@ -197,27 +360,31 @@ function LiveVoiceAssistantPage({
           {!conversation ? (
             <Button onClick={() => void startConversation()}>Start conversation</Button>
           ) : (
-            <div className="row" style={{ justifyContent: "center" }}>
+            <div className="row" style={{ justifyContent: "center", flexWrap: "wrap" }}>
               <Button
                 variant="primary"
                 disabled={livePhase === "thinking" || livePhase === "speaking"}
-                onPointerDown={(event) => {
-                  event.preventDefault();
+                onClick={() => {
                   if (busyRef.current) return;
                   recorderRef.current?.beginManualCapture();
                   setLivePhase("hearing");
                 }}
-                onPointerUp={() => {
-                  void recorderRef.current?.endManualCapture();
-                }}
-                onPointerCancel={() => {
-                  void recorderRef.current?.endManualCapture();
-                }}
               >
                 Hold to talk
               </Button>
-              <Button variant="secondary" onClick={endConversation}>
-                End
+              <Button
+                variant="secondary"
+                disabled={
+                  livePhase === "thinking" ||
+                  livePhase === "speaking" ||
+                  livePhase === "idle"
+                }
+                onClick={() => void onStopListening()}
+              >
+                Stop Listening
+              </Button>
+              <Button variant="tertiary" onClick={endConversation}>
+                End Conversation
               </Button>
             </div>
           )}
@@ -226,8 +393,10 @@ function LiveVoiceAssistantPage({
             <p className="muted">
               {conversation
                 ? livePhase === "thinking"
-                  ? "Sending to n8n… keep this tab open."
-                  : "Speak, pause ~1s, or hold Hold to talk then release."
+                  ? "Waiting for n8n (falls back to workspace records after 30s)…"
+                  : livePhase === "hearing"
+                    ? "Recording — pause briefly or tap Stop Listening to send."
+                    : "Ready. Tap Hold to talk, or just speak."
                 : "Start unlocks speech output and opens the microphone."}
             </p>
           </div>

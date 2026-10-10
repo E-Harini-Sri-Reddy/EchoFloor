@@ -21,6 +21,7 @@ import {
   registerOrganisationWithGoogle,
   removeMember,
   reportMachineIssue,
+  resolveOverheatingByVoice,
   setPermanentWorkerSuspension,
   updateMemory,
   updateShiftPolicy,
@@ -141,6 +142,30 @@ describe("live operational alerts", () => {
         }).some((alert) => alert.id === created.data?.id),
       ).toBe(true);
     }
+  });
+
+  it("resolves overheating by voice and removes that live alert", () => {
+    const worker = asWorker(createSeed());
+    const before = liveAlertsFor(worker, IDS.northstar, { now: demoNow });
+    expect(before.some((alert) => alert.id === "alert_m104_overheat")).toBe(true);
+
+    const resolved = resolveOverheatingByVoice(worker, IDS.m104);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.data?.message).toMatch(
+      /Database record updated\. New log created: Overheating issue solved by/,
+    );
+    expect(resolved.data?.removedAlertIds).toContain("alert_m104_overheat");
+    expect(
+      liveAlertsFor(resolved.db, IDS.northstar, { now: demoNow }).some(
+        (alert) => alert.id === "alert_m104_overheat",
+      ),
+    ).toBe(false);
+    expect(
+      resolved.db.memories.some((memory) =>
+        memory.title.startsWith("Overheating issue solved by"),
+      ),
+    ).toBe(true);
   });
 });
 
