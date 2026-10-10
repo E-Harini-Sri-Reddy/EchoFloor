@@ -44,8 +44,8 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
   const [saving, setSaving] = useState(false);
   if (!session) return null;
 
-  const base = role === "admin" ? "/admin" : "/worker";
-  const alertsPath = `${base}/alerts`;
+  const alertsPath =
+    role === "admin" ? "/admin/issues/alerts" : "/worker/issues/alerts";
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();

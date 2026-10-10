@@ -9,7 +9,9 @@ import {
   createTask,
   reportMachineIssue,
   generateHandover,
-  inviteWorker,
+  addMember,
+  leaveOrganisation,
+  removeMember,
   loginAsEmail,
   loginWithGoogle,
   loginWithPassword,
@@ -20,6 +22,7 @@ import {
   registerOrganisationWithGoogle,
   removeShiftAssignment,
   resolveAlert,
+  reviewIssuePhotoAi,
   selectMachine,
   setForceLoadError,
   setPermanentWorkerSuspension,
@@ -32,7 +35,7 @@ import {
   updateWorkerAccessWindow,
   type AssignWorkerToShiftInput,
   type CreateTaskInput,
-  type InviteWorkerInput,
+  type AddMemberInput,
   type MachineInput,
   type ReportInput,
   type ReportMachineIssueInput,
@@ -215,14 +218,17 @@ export const demoStore = {
     apply(updateMachine(database, machineId, input)),
   updateOrganisation: (input: { name: string; timezone: string }) =>
     apply(updateOrganisationSettings(database, input)),
-  inviteWorker: (input: InviteWorkerInput) => apply(inviteWorker(database, input)),
+  addMember: (input: AddMemberInput) => apply(addMember(database, input)),
+  leaveOrganisation: () => apply(leaveOrganisation(database)),
+  removeMember: (membershipId: string) =>
+    apply(removeMember(database, membershipId)),
   setPermanentWorkerSuspension: (membershipId: string, suspended: boolean) =>
     apply(setPermanentWorkerSuspension(database, membershipId, suspended)),
   updateWorkerAccessWindow: (
     membershipId: string,
     input: {
       workerAccessType: WorkerAccessType;
-      accessDuration: InviteWorkerInput["accessDuration"];
+      accessDuration: AddMemberInput["accessDuration"];
       customExpiresAt?: string;
     },
   ) => apply(updateWorkerAccessWindow(database, membershipId, input)),
@@ -240,6 +246,8 @@ export const demoStore = {
     apply(updateTaskStatus(database, taskId, status)),
   acknowledgeAlert: (alertId: string) => apply(acknowledgeAlert(database, alertId)),
   resolveAlert: (alertId: string) => apply(resolveAlert(database, alertId)),
+  reviewIssuePhotoAi: (alertId: string, decision: "cleared" | "flagged_false") =>
+    apply(reviewIssuePhotoAi(database, alertId, decision)),
   generateHandover: () => apply(generateHandover(database)),
   publishHandover: (handoverId: string) => apply(publishHandover(database, handoverId)),
   acknowledgeHandover: (handoverId: string) =>

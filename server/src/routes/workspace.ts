@@ -443,6 +443,440 @@ export function registerWorkspaceRoutes(app: Express, config: AppConfig) {
   );
 
   app.post(
+    `${prefix}/members`,
+    async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        const db = getDb();
+        if (!db) return unavailable(response);
+        const organisationId = asObjectId(String(request.body?.organisationId ?? ""));
+        const invitedBy = asObjectId(
+          String(request.body?.addedBy ?? request.body?.invitedBy ?? ""),
+        );
+        const email = normalizeEmail(String(request.body?.email ?? ""));
+        const temporaryPassword = String(request.body?.temporaryPassword ?? "").trim();
+        const workerAccessType =
+          request.body?.workerAccessType === "temporary" ? "temporary" : "permanent";
+        const accessDuration = String(request.body?.accessDuration ?? "until_removed");
+        const customExpiresAt = String(request.body?.customExpiresAt ?? "").trim();
+
+        if (!organisationId || !invitedBy) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "organisationId and addedBy are required.",
+            },
+          });
+          return;
+        }
+        if (!email.includes("@")) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "Enter a valid email address.",
+              fieldErrors: { email: "Enter a valid email address." },
+            },
+          });
+          return;
+        }
+        if (temporaryPassword.length < 8) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "Use at least 8 characters for the temporary password.",
+              fieldErrors: {
+                temporaryPassword: "Use at least 8 characters for the temporary password.",
+              },
+            },
+          });
+          return;
+        }
+
+        const inviterMembership = await db.collection("memberships").findOne({
+          organisationId,
+          userId: invitedBy,
+          role: "admin",
+          status: "active",
+        });
+        if (!inviterMembership) {
+          response.status(403).json({
+            success: false,
+            error: {
+              code: "FORBIDDEN",
+              message: "Only an active administrator can add members.",
+            },
+          });
+          return;
+        }
+
+        let accessExpiresAt: Date | null = null;
+        if (workerAccessType === "permanent") {
+          if (accessDuration !== "until_removed") {
+            response.status(400).json({
+              success: false,
+              error: {
+                code: "VALIDATION",
+                message:
+                  "Permanent workers stay active until manual removal or suspension.",
+                fieldErrors: {
+                  accessDuration:
+                    "Permanent workers stay active until manual removal or suspension.",
+                },
+              },
+            });
+            return;
+          }
+        } else if (accessDuration === "custom") {
+          const expires = new Date(customExpiresAt);
+          if (!customExpiresAt || Number.isNaN(expires.getTime()) || expires <= new Date()) {
+            response.status(400).json({
+              success: false,
+              error: {
+                code: "VALIDATION",
+                message: "Choose a valid future custom end date and time.",
+                fieldErrors: {
+                  accessDuration: "Choose a valid future custom end date and time.",
+                },
+              },
+            });
+            return;
+          }
+          accessExpiresAt = expires;
+        } else {
+          const offsets: Record<string, number> = {
+            "24h": 24 * 60 * 60 * 1000,
+            "1w": 7 * 24 * 60 * 60 * 1000,
+            "1m": 30 * 24 * 60 * 60 * 1000,
+          };
+          const ms = offsets[accessDuration];
+          if (!ms) {
+            response.status(400).json({
+              success: false,
+              error: {
+                code: "VALIDATION",
+                message: "Choose how long temporary access should last.",
+                fieldErrors: {
+                  accessDuration: "Choose how long temporary access should last.",
+                },
+              },
+            });
+            return;
+          }
+          accessExpiresAt = new Date(Date.now() + ms);
+        }
+
+        const existing = await db.collection("users").findOne({ emailNormalized: email });
+        if (existing) {
+          const alreadyMember = await db.collection("memberships").findOne({
+            organisationId,
+            userId: existing._id,
+            status: { $in: ["active", "suspended"] },
+          });
+          if (alreadyMember) {
+            response.status(409).json({
+              success: false,
+              error: {
+                code: "CONFLICT",
+                message: "That person is already a member of this organisation.",
+                fieldErrors: {
+                  email: "That person is already a member of this organisation.",
+                },
+              },
+            });
+            return;
+          }
+        }
+
+        const now = new Date();
+        const userId = existing ? (existing._id as ObjectId) : new ObjectId();
+        const membershipId = new ObjectId();
+        const invitationId = new ObjectId();
+        const displayName =
+          existing?.displayName ??
+          email.split("@")[0] ??
+          email;
+
+        if (!existing) {
+          await db.collection("users").insertOne({
+            _id: userId,
+            email,
+            emailNormalized: email,
+            displayName,
+            authProviders: ["password"],
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          });
+        } else {
+          await db.collection("users").updateOne(
+            { _id: userId },
+            {
+              $addToSet: { authProviders: "password" },
+              $set: { updatedAt: now },
+            },
+          );
+        }
+
+        await db.collection("credentials").updateOne(
+          { userId },
+          {
+            $set: {
+              passwordHash: temporaryPassword,
+              temporary: true,
+              updatedAt: now,
+            },
+            $setOnInsert: {
+              _id: new ObjectId(),
+              userId,
+              createdAt: now,
+            },
+          },
+          { upsert: true },
+        );
+
+        await db.collection("memberships").insertOne({
+          _id: membershipId,
+          organisationId,
+          userId,
+          role: "worker",
+          status: "active",
+          workerAccessType,
+          accessExpiresAt,
+          accessDurationPreset: accessDuration,
+          joinedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        await db.collection("invitations").insertOne({
+          _id: invitationId,
+          organisationId,
+          emailNormalized: email,
+          role: "worker",
+          workerAccessType,
+          accessDurationPreset: accessDuration,
+          accessExpiresAt,
+          status: "accepted",
+          invitedBy,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        await db.collection("user_preferences").updateOne(
+          { userId, organisationId },
+          {
+            $set: {
+              emailAlerts: true,
+              showVoiceTextFirst: false,
+              updatedAt: now,
+            },
+            $setOnInsert: {
+              _id: new ObjectId(),
+              userId,
+              organisationId,
+            },
+          },
+          { upsert: true },
+        );
+
+        const packed = await workspaceForUser(invitedBy);
+        response.status(201).json({ success: true, data: packed });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  app.post(
+    `${prefix}/memberships/remove`,
+    async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        const db = getDb();
+        if (!db) return unavailable(response);
+        const membershipId = asObjectId(String(request.body?.membershipId ?? ""));
+        const organisationId = asObjectId(String(request.body?.organisationId ?? ""));
+        const removedBy = asObjectId(String(request.body?.removedBy ?? ""));
+        const confirm = Boolean(request.body?.confirm);
+        if (!membershipId || !organisationId || !removedBy) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "membershipId, organisationId, and removedBy are required.",
+            },
+          });
+          return;
+        }
+        if (!confirm) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "Confirm that you want to remove this member.",
+            },
+          });
+          return;
+        }
+        const actorMembership = await db.collection("memberships").findOne({
+          organisationId,
+          userId: removedBy,
+          role: "admin",
+          status: "active",
+        });
+        if (!actorMembership) {
+          response.status(403).json({
+            success: false,
+            error: {
+              code: "FORBIDDEN",
+              message: "Only an active administrator can remove members.",
+            },
+          });
+          return;
+        }
+        const membership = await db.collection("memberships").findOne({
+          _id: membershipId,
+          organisationId,
+          status: { $in: ["active", "suspended"] },
+        });
+        if (!membership) {
+          response.status(404).json({
+            success: false,
+            error: {
+              code: "NOT_FOUND",
+              message: "Membership not found.",
+            },
+          });
+          return;
+        }
+        if (toId(membership.userId) === toId(removedBy)) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message:
+                "You cannot remove yourself here. Use Leave organisation in Settings.",
+            },
+          });
+          return;
+        }
+        if (membership.role === "admin") {
+          const otherAdmins = await db.collection("memberships").countDocuments({
+            organisationId,
+            role: "admin",
+            status: "active",
+            _id: { $ne: membershipId },
+          });
+          if (otherAdmins === 0) {
+            response.status(403).json({
+              success: false,
+              error: {
+                code: "FORBIDDEN",
+                message: "Cannot remove the only active administrator.",
+              },
+            });
+            return;
+          }
+        }
+        await db.collection("memberships").updateOne(
+          { _id: membership._id },
+          { $set: { status: "removed", updatedAt: new Date() } },
+        );
+        const packed = await workspaceForUser(removedBy);
+        if (!packed) {
+          response.status(500).json({
+            success: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Member was removed, but the workspace could not be reloaded.",
+            },
+          });
+          return;
+        }
+        response.json({ success: true, data: packed });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  app.post(
+    `${prefix}/memberships/leave`,
+    async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        const db = getDb();
+        if (!db) return unavailable(response);
+        const userId = asObjectId(String(request.body?.userId ?? ""));
+        const organisationId = asObjectId(String(request.body?.organisationId ?? ""));
+        const confirm = Boolean(request.body?.confirm);
+        if (!userId || !organisationId) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "userId and organisationId are required.",
+            },
+          });
+          return;
+        }
+        if (!confirm) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "Confirm that you want to leave this organisation.",
+            },
+          });
+          return;
+        }
+        const membership = await db.collection("memberships").findOne({
+          userId,
+          organisationId,
+          status: { $in: ["active", "suspended"] },
+        });
+        if (!membership) {
+          response.status(404).json({
+            success: false,
+            error: {
+              code: "NOT_FOUND",
+              message: "No active membership was found for this organisation.",
+            },
+          });
+          return;
+        }
+        if (membership.role === "admin") {
+          const otherAdmins = await db.collection("memberships").countDocuments({
+            organisationId,
+            role: "admin",
+            status: "active",
+            userId: { $ne: userId },
+          });
+          if (otherAdmins === 0) {
+            response.status(403).json({
+              success: false,
+              error: {
+                code: "FORBIDDEN",
+                message:
+                  "You are the only administrator. Add another administrator before leaving.",
+              },
+            });
+            return;
+          }
+        }
+        await db.collection("memberships").updateOne(
+          { _id: membership._id },
+          { $set: { status: "removed", updatedAt: new Date() } },
+        );
+        response.json({ success: true, data: { left: true } });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  app.post(
     `${prefix}/machines`,
     async (request: Request, response: Response, next: NextFunction) => {
       try {

@@ -627,19 +627,19 @@ export function updateOrganisationSettings(
   };
 }
 
-export interface InviteWorkerInput {
+export interface AddMemberInput {
   email: string;
-  /** Temporary password stored in the demo credential map for first sign-in. */
+  /** Temporary password stored for first sign-in. */
   temporaryPassword: string;
   workerAccessType: WorkerAccessType;
   accessDuration: WorkerAccessDuration;
   customExpiresAt?: string;
 }
 
-export function inviteWorker(
-  db: DemoDatabase,
-  input: InviteWorkerInput,
-): OperationResult {
+/** @deprecated Use AddMemberInput */
+export type InviteWorkerInput = AddMemberInput;
+
+export function addMember(db: DemoDatabase, input: AddMemberInput): OperationResult {
   const session = requireAdmin(db);
   if (!isSession(session)) return session;
   const normalized = normalizeEmail(input.email);
@@ -659,7 +659,7 @@ export function inviteWorker(
     fieldErrors.accessDuration = access.message;
   }
   if (Object.keys(fieldErrors).length > 0) {
-    return fail("VALIDATION", "Check the invitation details.", fieldErrors);
+    return fail("VALIDATION", "Check the member details.", fieldErrors);
   }
   const existingUser = db.users.find((user) => user.emailNormalized === normalized);
   if (
@@ -683,18 +683,15 @@ export function inviteWorker(
         invitation.status === "pending",
     )
   ) {
-    return fail("CONFLICT", "An invitation is already pending.", {
-      email: "A pending invitation already exists for that email.",
+    return fail("CONFLICT", "That member was already added and is pending.", {
+      email: "That email already has a pending membership add.",
     });
   }
 
   const now = new Date().toISOString();
-  const inviteTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const recordExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const accessExpiresAt = access.ok ? access.accessExpiresAt : null;
 
-  // Preview: create a usable membership immediately so temporary/permanent
-  // access can be reviewed without email delivery. The temporary password is
-  // written into the credential map so email/password and Google share one user id.
   const userId = existingUser?.id ?? newId("user");
   const users = existingUser
     ? db.users.map((user) =>
@@ -744,7 +741,7 @@ export function inviteWorker(
         accessExpiresAt,
         status: "accepted",
         invitedBy: session.userId,
-        expiresAt: inviteTokenExpires,
+        expiresAt: recordExpires,
         createdAt: now,
         updatedAt: now,
       },
@@ -760,10 +757,10 @@ export function inviteWorker(
       ...db.auditEvents,
       audit(
         session,
-        "invitation.create",
-        "invitation",
-        normalized,
-        `Added a ${input.workerAccessType} worker with a temporary password. Email delivery is not configured.`,
+        "membership.add",
+        "membership",
+        membership.id,
+        `Added a ${input.workerAccessType} member with a temporary password.`,
       ),
     ],
   };
@@ -771,6 +768,121 @@ export function inviteWorker(
   return {
     ok: true,
     db: setCredential(withMembership, userId, input.temporaryPassword.trim(), true),
+  };
+}
+
+/** @deprecated Use addMember */
+export const inviteWorker = addMember;
+
+export function leaveOrganisation(db: DemoDatabase): OperationResult {
+  const session = db.session;
+  if (!session) return fail("FORBIDDEN", "Sign in is required.");
+  const membership = db.memberships.find(
+    (item) =>
+      item.userId === session.userId &&
+      item.organisationId === session.organisationId &&
+      item.status !== "removed",
+  );
+  if (!membership) {
+    return fail("NOT_FOUND", "No active membership was found for this organisation.");
+  }
+  if (membership.role === "admin") {
+    const otherAdmins = db.memberships.filter(
+      (item) =>
+        item.organisationId === session.organisationId &&
+        item.role === "admin" &&
+        item.status === "active" &&
+        item.userId !== session.userId,
+    );
+    if (otherAdmins.length === 0) {
+      return fail(
+        "FORBIDDEN",
+        "You are the only administrator. Add another administrator before leaving.",
+      );
+    }
+  }
+  const now = new Date().toISOString();
+  return {
+    ok: true,
+    db: {
+      ...db,
+      memberships: db.memberships.map((item) =>
+        item.id === membership.id
+          ? { ...item, status: "removed" as const, updatedAt: now }
+          : item,
+      ),
+      session: null,
+      selectedMachineId: null,
+      auditEvents: [
+        ...db.auditEvents,
+        audit(
+          session,
+          "membership.leave",
+          "membership",
+          membership.id,
+          "Member left the organisation.",
+        ),
+      ],
+    },
+  };
+}
+
+export function removeMember(
+  db: DemoDatabase,
+  membershipId: string,
+): OperationResult {
+  const session = requireAdmin(db);
+  if (!isSession(session)) return session;
+  const membership = db.memberships.find(
+    (item) =>
+      item.id === membershipId &&
+      item.organisationId === session.organisationId &&
+      item.status !== "removed",
+  );
+  if (!membership) return fail("NOT_FOUND", "Membership not found.");
+  if (membership.userId === session.userId) {
+    return fail(
+      "VALIDATION",
+      "You cannot remove yourself here. Use Leave organisation in Settings.",
+    );
+  }
+  if (membership.role === "admin") {
+    const otherAdmins = db.memberships.filter(
+      (item) =>
+        item.organisationId === session.organisationId &&
+        item.role === "admin" &&
+        item.status === "active" &&
+        item.id !== membership.id,
+    );
+    if (otherAdmins.length === 0) {
+      return fail(
+        "FORBIDDEN",
+        "Cannot remove the only active administrator.",
+      );
+    }
+  }
+  const now = new Date().toISOString();
+  const user = db.users.find((item) => item.id === membership.userId);
+  return {
+    ok: true,
+    db: {
+      ...db,
+      memberships: db.memberships.map((item) =>
+        item.id === membership.id
+          ? { ...item, status: "removed" as const, updatedAt: now }
+          : item,
+      ),
+      auditEvents: [
+        ...db.auditEvents,
+        audit(
+          session,
+          "membership.remove",
+          "membership",
+          membership.id,
+          `Removed ${user?.displayName ?? "member"} from the organisation.`,
+        ),
+      ],
+    },
   };
 }
 
@@ -1116,6 +1228,68 @@ export function resolveAlert(db: DemoDatabase, alertId: string): OperationResult
       auditEvents: [
         ...db.auditEvents,
         audit(session, "alert.resolve", "alert", alert.id, "Marked the alert resolved."),
+      ],
+    },
+  };
+}
+
+/** Administrator decision on AI false-report screening for an issue photo. */
+export function reviewIssuePhotoAi(
+  db: DemoDatabase,
+  alertId: string,
+  decision: "cleared" | "flagged_false",
+): OperationResult {
+  const session = requireAdmin(db);
+  if (!isSession(session)) return session;
+  const alert = db.alerts.find(
+    (item) => item.id === alertId && item.organisationId === session.organisationId,
+  );
+  if (!alert) return fail("NOT_FOUND", "Alert not found in this organisation.");
+  if (!alert.photoAiReview) {
+    return fail("VALIDATION", "This alert has no photo screening to review.");
+  }
+  if (
+    alert.photoAiReview.status !== "needs_admin_review" &&
+    alert.photoAiReview.status !== "flagged_false" &&
+    alert.photoAiReview.status !== "queued"
+  ) {
+    return fail("VALIDATION", "This photo screening has already been decided.");
+  }
+  const now = new Date().toISOString();
+  const note =
+    decision === "cleared"
+      ? "Administrator approved this report. The photo was treated as plausible."
+      : "Administrator marked this as a false report after reviewing the photo.";
+  return {
+    ok: true,
+    db: {
+      ...db,
+      alerts: db.alerts.map((item) =>
+        item.id === alert.id
+          ? {
+              ...item,
+              photoAiReview: {
+                status: decision,
+                note,
+                updatedAt: now,
+              },
+              ...(decision === "flagged_false"
+                ? { status: "dismissed" as const, resolvedAt: now }
+                : {}),
+            }
+          : item,
+      ),
+      auditEvents: [
+        ...db.auditEvents,
+        audit(
+          session,
+          decision === "cleared" ? "alert.photo_cleared" : "alert.photo_flagged_false",
+          "alert",
+          alert.id,
+          decision === "cleared"
+            ? "Approved the issue report after photo review."
+            : "Denied the issue report as a false report after photo review.",
+        ),
       ],
     },
   };

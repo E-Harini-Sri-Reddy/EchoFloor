@@ -1,45 +1,69 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ButtonLink } from "@/components/ui/Button";
+import { Button, ButtonLink } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/States";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { constraintDisplayStatus, isConstraintActive } from "@/domain/constraints";
-import { labelMemoryStatus, labelMachineStatus } from "@/domain/labels";
+import { useToast } from "@/components/ui/Toast";
+import { labelIssuePhotoAiReview, labelMemoryStatus } from "@/domain/labels";
 import {
-  liveAlertsFor,
-  constraintsForMachine,
-  countOpenAlerts,
   handoversFor,
-  latestMemoryForMachine,
+  machineById,
   machinesFor,
-  memoriesForMachine,
+  photoReviewsNeedingAdmin,
   unresolvedMemories,
-  tasksFor,
   userById,
 } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
+import { demoStore } from "@/services/demoStore";
 import { formatTimestamp } from "@/utils/format";
+
+type WorkSummaryPeriod = "daily" | "weekly" | "monthly" | "yearly";
+
+const PERIODS: { id: WorkSummaryPeriod; label: string; title: string }[] = [
+  { id: "daily", label: "Daily", title: "Daily Work Summary" },
+  { id: "weekly", label: "Weekly", title: "Weekly Work Summary" },
+  { id: "monthly", label: "Monthly", title: "Monthly Work Summary" },
+  { id: "yearly", label: "Yearly", title: "Yearly Work Summary" },
+];
 
 export function AdminOverviewPage() {
   const db = useDemoDatabase();
   const session = db.session;
+  const toast = useToast();
+  const [period, setPeriod] = useState<WorkSummaryPeriod>("daily");
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   if (!session) return null;
   const organisation = db.organisations.find(
     (item) => item.id === session.organisationId,
   );
   const machines = machinesFor(db, session.organisationId);
-  const memories = db.memories.filter(
-    (memory) => memory.organisationId === session.organisationId,
-  );
-  const alerts = liveAlertsFor(db, session.organisationId);
-  const now = new Date();
-  const activeConstraints = db.constraints.filter(
-    (constraint) =>
-      constraint.organisationId === session.organisationId &&
-      isConstraintActive(constraint, now),
-  );
-  const openIssues = unresolvedMemories(memories);
-  const openTasks = tasksFor(db, session.organisationId, { status: "openish" });
+  const selected = PERIODS.find((item) => item.id === period) ?? PERIODS[0];
   const timezone = organisation?.settings.timezone ?? "UTC";
+  const photoReviews = photoReviewsNeedingAdmin(db, session.organisationId);
+  const pendingMemories = unresolvedMemories(
+    db.memories.filter((memory) => memory.organisationId === session.organisationId),
+  );
+  const recent = [...db.memories]
+    .filter((memory) => memory.organisationId === session.organisationId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 5);
+  const handovers = handoversFor(db, session.organisationId);
+
+  async function decidePhoto(alertId: string, decision: "cleared" | "flagged_false") {
+    setReviewingId(alertId);
+    await new Promise((resolve) => window.setTimeout(resolve, 200));
+    const result = demoStore.reviewIssuePhotoAi(alertId, decision);
+    setReviewingId(null);
+    if (!result.ok) {
+      toast.push(result.message);
+      return;
+    }
+    toast.push(
+      decision === "cleared"
+        ? "Report approved. Photo screening marked cleared."
+        : "Marked as a false report. The alert was dismissed.",
+    );
+  }
 
   if (machines.length === 0) {
     return (
@@ -48,23 +72,19 @@ export function AdminOverviewPage() {
           <div>
             <h2>Set up {organisation?.name}</h2>
             <p className="lede">
-              No machines are registered. Counts stay empty until you add one.
+              No machines are registered. Work summaries stay empty until you add one.
             </p>
           </div>
         </header>
         <ol className="card stack">
           <li>Organisation {organisation?.name} is active. You are the administrator.</li>
           <li>Add the first machine from Machine Details. An NFC tag is optional.</li>
-          <li>Invite workers from Settings. They receive worker access.</li>
+          <li>Add members from Users. They receive worker access.</li>
         </ol>
         <ButtonLink to="/admin/machines">Go to Machine Details</ButtonLink>
       </div>
     );
   }
-
-  const recent = [...memories]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 4);
 
   return (
     <div className="page">
@@ -72,12 +92,12 @@ export function AdminOverviewPage() {
         <div>
           <h2>Good day, {session.displayName.split(" ")[0]}</h2>
           <p className="lede">
-            {organisation?.name}. Figures below are counted from example records in this
-            browser session. They are not live plant metrics.
+            {organisation?.name}. Work summaries will be generated by AI once that
+            integration is connected.
           </p>
         </div>
         <div className="row">
-          <ButtonLink to="/admin/report-issue">Report issue</ButtonLink>
+          <ButtonLink to="/admin/issues/report">Report issue</ButtonLink>
           <ButtonLink to="/admin/tasks" variant="secondary">
             Assign tasks
           </ButtonLink>
@@ -86,132 +106,136 @@ export function AdminOverviewPage() {
           </ButtonLink>
         </div>
       </header>
-      <section className="metric-grid" aria-label="Summary">
-        <article className="metric">
-          <span>Registered machines</span>
-          <strong>{machines.length}</strong>
-        </article>
-        <article className="metric">
-          <span>Open tasks</span>
-          <strong>{openTasks.length}</strong>
-        </article>
-        <article className="metric">
-          <span>Unacknowledged alerts</span>
-          <strong>{countOpenAlerts(alerts)}</strong>
-        </article>
-        <article className="metric">
-          <span>Reports still open</span>
-          <strong>{openIssues.length}</strong>
-        </article>
-        <article className="metric">
-          <span>Active constraints</span>
-          <strong>{activeConstraints.length}</strong>
+
+      <section className="stack" aria-label="Work summaries">
+        <h3>Work summaries</h3>
+        <div className="tabs" role="tablist" aria-label="Summary period">
+          {PERIODS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              className="tab"
+              aria-selected={period === item.id}
+              onClick={() => setPeriod(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <article className="card stack" role="tabpanel" aria-label={selected.title}>
+          <h3>{selected.title}</h3>
+          <p className="muted">AI summary pending.</p>
         </article>
       </section>
+
       <div className="split">
         <section className="stack">
-          <h3>Machines</h3>
-          {machines.map((machine) => {
-            const latest = latestMemoryForMachine(memories, machine.id);
-            const machineConstraints = constraintsForMachine(
-              db,
-              session.organisationId,
-              machine.id,
-            );
-            const active = machineConstraints.filter((constraint) =>
-              isConstraintActive(constraint, now),
-            );
-            return (
-              <Link
-                key={machine.id}
-                className="list-card"
-                to={`/admin/machines/${machine.id}`}
-              >
-                <div className="spread">
-                  <strong className="mono">{machine.machineCode}</strong>
-                  <StatusBadge
-                    status={machine.status}
-                    label={labelMachineStatus(machine.status)}
-                  />
-                </div>
-                <span>{machine.name}</span>
-                <span className="muted">
-                  {machine.location.productionLine ?? "Line not set"}
-                  {machine.location.area ? ` · ${machine.location.area}` : ""}
-                </span>
-                <span className="muted">
-                  {latest
-                    ? `Latest record: ${latest.title} · ${labelMemoryStatus(latest.status)}`
-                    : "No operational records yet"}
-                </span>
-                <span className="muted">
-                  {active.length > 0
-                    ? `${active.length} active constraint${active.length === 1 ? "" : "s"}`
-                    : "No active constraint"}
-                  {" · "}
-                  {
-                    unresolvedMemories(
-                      memoriesForMachine(db, session.organisationId, machine.id),
-                    ).length
-                  }{" "}
-                  open reports
-                </span>
-              </Link>
-            );
-          })}
-        </section>
-        <section className="stack">
           <h3>Needs attention</h3>
-          {openIssues.length === 0 && activeConstraints.length === 0 ? (
+          {photoReviews.length === 0 && pendingMemories.length === 0 ? (
             <EmptyState
               title="Nothing is waiting"
-              message="No unresolved reports or active constraints are in this session."
+              message="No AI photo reviews or open reports need your decision right now."
             />
           ) : (
-            <ul className="timeline">
-              {openIssues.slice(0, 4).map((memory) => (
-                <li key={memory.id}>
-                  <Link to={`/admin/memories/${memory.id}`}>{memory.title}</Link>
-                  <div className="muted">{labelMemoryStatus(memory.status)}</div>
-                </li>
-              ))}
-              {activeConstraints.map((constraint) => (
-                <li key={constraint.id}>
-                  <strong>{constraint.title}</strong>
-                  <div className="muted">
-                    {constraintDisplayStatus(constraint, now)} · expires{" "}
-                    {constraint.expiresAt
-                      ? formatTimestamp(constraint.expiresAt, timezone)
-                      : "no expiry"}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          <h3>Recent records</h3>
-          <ul className="timeline">
-            {recent.map((memory) => {
-              const machine = machines.find((item) => item.id === memory.machineId);
-              const author = userById(db, memory.createdBy);
-              return (
-                <li key={memory.id} className="card">
+            <div className="stack">
+              {photoReviews.map((alert) => {
+                const machine = alert.machineId
+                  ? machineById(db, session.organisationId, alert.machineId)
+                  : null;
+                const review = alert.photoAiReview!;
+                return (
+                  <article key={alert.id} className="card stack">
+                    <div className="spread">
+                      <strong>{alert.title}</strong>
+                      <StatusBadge
+                        status="warning"
+                        label={labelIssuePhotoAiReview(review.status)}
+                      />
+                    </div>
+                    <p className="muted">
+                      {machine
+                        ? `${machine.machineCode} · ${machine.name}`
+                        : "No machine linked"}{" "}
+                      · {formatTimestamp(alert.createdAt, timezone)}
+                    </p>
+                    <p>{review.note}</p>
+                    <div className="row">
+                      <Button
+                        loading={reviewingId === alert.id}
+                        onClick={() => void decidePhoto(alert.id, "cleared")}
+                      >
+                        Approve report
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        loading={reviewingId === alert.id}
+                        onClick={() => void decidePhoto(alert.id, "flagged_false")}
+                      >
+                        Mark false report
+                      </Button>
+                      <ButtonLink to={`/admin/alerts/${alert.id}`} variant="tertiary">
+                        Open alert
+                      </ButtonLink>
+                    </div>
+                  </article>
+                );
+              })}
+              {pendingMemories.slice(0, 4).map((memory) => (
+                <article key={memory.id} className="list-card stack">
                   <div className="spread">
-                    <strong>{memory.title}</strong>
+                    <Link to={`/admin/memories/${memory.id}`}>
+                      <strong>{memory.title}</strong>
+                    </Link>
                     <StatusBadge
                       status={memory.status}
                       label={labelMemoryStatus(memory.status)}
                     />
                   </div>
                   <span className="muted">
-                    {machine?.machineCode} · {formatTimestamp(memory.createdAt, timezone)}{" "}
-                    · {author?.displayName ?? "Unknown"}
+                    Open report · {formatTimestamp(memory.updatedAt, timezone)}
                   </span>
-                </li>
-              );
-            })}
-          </ul>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="stack">
+          <h3>Recent records</h3>
+          {recent.length === 0 ? (
+            <EmptyState
+              title="No records yet"
+              message="Operational memories for this organisation will appear here."
+            />
+          ) : (
+            <ul className="timeline">
+              {recent.map((memory) => {
+                const machine = machines.find((item) => item.id === memory.machineId);
+                const author = userById(db, memory.createdBy);
+                return (
+                  <li key={memory.id} className="card">
+                    <div className="spread">
+                      <Link to={`/admin/memories/${memory.id}`}>
+                        <strong>{memory.title}</strong>
+                      </Link>
+                      <StatusBadge
+                        status={memory.status}
+                        label={labelMemoryStatus(memory.status)}
+                      />
+                    </div>
+                    <span className="muted">
+                      {machine?.machineCode ?? "Machine"} ·{" "}
+                      {formatTimestamp(memory.createdAt, timezone)} ·{" "}
+                      {author?.displayName ?? "Unknown"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <Link to="/admin/handover">
-            Review shift handover ({handoversFor(db, session.organisationId).length})
+            Review shift handover ({handovers.length})
           </Link>
         </section>
       </div>

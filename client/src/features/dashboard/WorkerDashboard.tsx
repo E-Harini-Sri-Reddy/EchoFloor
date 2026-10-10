@@ -1,44 +1,50 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ButtonLink } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/States";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { isTemporaryWorker } from "@/domain/access";
+import { summarizeTaskDescription } from "@/domain/assistant";
 import {
   labelAlertStatus,
-  labelMachineStatus,
-  labelMemoryStatus,
   labelSeverity,
+  labelTaskPriority,
+  labelTaskStatus,
 } from "@/domain/labels";
 import {
-  liveAlertsFor,
   assignmentsForUser,
   handoversFor,
-  latestMemoryForMachine,
-  machinesFor,
+  liveAlertsFor,
+  machineById,
   tasksFor,
 } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
-import { formatTimeRange, shiftWindowLabel } from "@/utils/format";
+import { formatTimeRange, formatTimestamp, shiftWindowLabel } from "@/utils/format";
+
+type WorkSummaryPeriod = "daily" | "weekly" | "monthly" | "yearly";
+
+const PERIODS: { id: WorkSummaryPeriod; label: string; title: string }[] = [
+  { id: "daily", label: "Daily", title: "Daily Work Summary" },
+  { id: "weekly", label: "Weekly", title: "Weekly Work Summary" },
+  { id: "monthly", label: "Monthly", title: "Monthly Work Summary" },
+  { id: "yearly", label: "Yearly", title: "Yearly Work Summary" },
+];
 
 export function WorkerDashboardPage() {
   const db = useDemoDatabase();
   const session = db.session;
+  const [period, setPeriod] = useState<WorkSummaryPeriod>("daily");
   if (!session) return null;
   const organisation = db.organisations.find(
     (item) => item.id === session.organisationId,
   );
   const timezone = organisation?.settings.timezone ?? "UTC";
+  const selected = PERIODS.find((item) => item.id === period) ?? PERIODS[0];
   const assignments = assignmentsForUser(db, session.organisationId, session.userId);
   const shifts = assignments
     .map((assignment) => db.shifts.find((shift) => shift.id === assignment.shiftId))
     .filter((shift) => shift !== undefined);
   const current = shifts[0];
-  const machines = machinesFor(db, session.organisationId).filter((machine) => {
-    if (assignments.length === 0) return machine.status !== "inactive";
-    return assignments.some((assignment) => assignment.machineIds.includes(machine.id));
-  });
-  const memories = db.memories.filter(
-    (memory) => memory.organisationId === session.organisationId,
-  );
   const alerts = liveAlertsFor(db, session.organisationId, {
     audienceUserId: session.userId,
   });
@@ -49,133 +55,165 @@ export function WorkerDashboardPage() {
     assigneeUserId: session.userId,
     status: "openish",
   });
+  const temporary = isTemporaryWorker(session);
 
   return (
-    <div className="page">
+    <div className="page worker-dashboard">
       <header className="page-header">
         <div>
-          <h2>{session.displayName.split(" ")[0]}, here is your shift</h2>
+          <h2>{session.displayName.split(" ")[0]}, your work</h2>
           <p className="lede">
             {current
               ? `${current.name}: ${formatTimeRange(current.startAt, current.endAt, timezone)} · ${shiftWindowLabel(current.startAt, current.endAt)}`
-              : "No shift is assigned."}{" "}
-            This is not a clock-in record.
+              : "No shift is assigned right now."}{" "}
+            Summaries below cover your work only.
           </p>
         </div>
         <div className="row">
-          <ButtonLink to="/worker/report-issue">Report issue</ButtonLink>
-          <ButtonLink to="/worker/voice" variant="secondary">
-            Ask or report
+          <ButtonLink to="/worker/issues/report">Report issue</ButtonLink>
+          <ButtonLink to="/worker/tasks" variant="secondary">
+            My tasks ({openTasks.length})
           </ButtonLink>
         </div>
       </header>
-      <div className="card-grid">
-        <Link className="list-card" to="/worker/report-issue">
-          <strong>Report machine issue</strong>
-          <span className="muted">
-            Breakdown, damage, or unsafe condition — photo required.
-          </span>
-        </Link>
-        <Link className="list-card" to="/worker/tasks">
-          <strong>My tasks</strong>
-          <span className="muted">
-            {openTasks.length} open
-            {openTasks[0] ? ` · next: ${openTasks[0].title}` : ""}.
-          </span>
-        </Link>
-        <Link className="list-card" to="/worker/voice">
-          <strong>Voice Assistant</strong>
-          <span className="muted">Ask about a machine or submit a new report.</span>
-        </Link>
-        <Link className="list-card" to="/worker/machines">
-          <strong>Machines</strong>
-          <span className="muted">{machines.length} in your current view.</span>
-        </Link>
-        <Link className="list-card" to="/worker/alerts">
-          <strong>Alerts</strong>
-          <span className="muted">{alerts.length} open application notices.</span>
-        </Link>
-        <Link className="list-card" to="/worker/shift">
-          <strong>My Shift</strong>
-          <span className="muted">Handover notes and follow-ups.</span>
-        </Link>
-      </div>
-      <section className="stack">
-        <h3>Machines for this view</h3>
-        {machines.length === 0 ? (
+
+      <section className="stack" aria-label="Work summary">
+        <h3>Work summary</h3>
+        <div className="tabs" role="tablist" aria-label="Summary period">
+          {PERIODS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              className="tab"
+              aria-selected={period === item.id}
+              onClick={() => setPeriod(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <article className="card stack" role="tabpanel" aria-label={selected.title}>
+          <h3>{selected.title}</h3>
+          <p className="muted">
+            AI summary of your work for this period is pending. It will appear here once
+            the integration is connected.
+          </p>
+        </article>
+      </section>
+
+      <section className="stack" aria-label="Tasks assigned">
+        <div className="spread">
+          <h3>Tasks assigned</h3>
+          {openTasks.length > 0 ? <Link to="/worker/tasks">View all</Link> : null}
+        </div>
+        {openTasks.length === 0 ? (
           <EmptyState
-            title="No machines in view"
-            message="An administrator has not assigned machines, and none are active in this organisation."
+            title="No open tasks"
+            message="Nothing is assigned to you right now."
           />
         ) : (
-          machines.map((machine) => {
-            const latest = latestMemoryForMachine(memories, machine.id);
-            return (
+          <div className="stack">
+            {openTasks.slice(0, 5).map((task) => {
+              const machine = task.machineId
+                ? machineById(db, session.organisationId, task.machineId)
+                : null;
+              const aiBrief = summarizeTaskDescription(task.description);
+              return (
+                <Link
+                  key={task.id}
+                  className="list-card stack"
+                  to={`/worker/tasks?task=${encodeURIComponent(task.id)}`}
+                >
+                  <div className="spread">
+                    <strong>{task.title}</strong>
+                    <div className="row">
+                      <StatusBadge
+                        status={task.priority}
+                        label={labelTaskPriority(task.priority)}
+                      />
+                      <StatusBadge
+                        status={task.status}
+                        label={labelTaskStatus(task.status)}
+                      />
+                    </div>
+                  </div>
+                  {aiBrief ? (
+                    <p className="muted">
+                      <span className="card-kicker">AI summary · </span>
+                      {aiBrief}
+                    </p>
+                  ) : null}
+                  <span className="muted">
+                    {machine ? (
+                      <>
+                        <span className="mono">{machine.machineCode}</span>
+                        {task.dueAt ? " · " : ""}
+                      </>
+                    ) : null}
+                    {task.dueAt ? `Due ${formatTimestamp(task.dueAt, timezone)}` : null}
+                    {!machine && !task.dueAt ? "Open task" : null}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <div className="dashboard-pair">
+        <section className="card stack dashboard-pair-panel">
+          <div className="spread">
+            <h3>Alerts</h3>
+            {alerts.length > 0 ? (
+              <Link to="/worker/issues/alerts">View all</Link>
+            ) : null}
+          </div>
+          {alerts.length === 0 ? (
+            <EmptyState
+              title="No open alerts"
+              message="Nothing needs your attention right now."
+            />
+          ) : (
+            alerts.slice(0, 4).map((alert) => (
               <Link
-                key={machine.id}
+                key={alert.id}
                 className="list-card"
-                to={`/worker/machines/${machine.id}`}
+                to={`/worker/alerts/${alert.id}`}
               >
                 <div className="spread">
-                  <strong className="mono">{machine.machineCode}</strong>
+                  <strong>{alert.title}</strong>
                   <StatusBadge
-                    status={machine.status}
-                    label={labelMachineStatus(machine.status)}
+                    status={alert.severity}
+                    label={labelSeverity(alert.severity)}
                   />
                 </div>
-                <span>{machine.name}</span>
-                <span className="muted">
-                  {machine.location.productionLine ?? "Line not set"}
-                </span>
-                <span className="muted">
-                  {latest
-                    ? `${latest.title} · ${labelMemoryStatus(latest.status)}`
-                    : "No records yet"}
-                </span>
+                <span className="muted">{labelAlertStatus(alert.status)}</span>
               </Link>
-            );
-          })
-        )}
-      </section>
-      <section className="stack">
-        <h3>Open alerts</h3>
-        {alerts.length === 0 ? (
-          <EmptyState
-            title="No open alerts"
-            message="There are no open application notices for this organisation in the session."
-          />
-        ) : (
-          alerts.slice(0, 3).map((alert) => (
-            <Link key={alert.id} className="list-card" to={`/worker/alerts/${alert.id}`}>
-              <div className="spread">
-                <strong>{alert.title}</strong>
-                <StatusBadge
-                  status={alert.severity}
-                  label={labelSeverity(alert.severity)}
-                />
-              </div>
-              <span className="muted">{labelAlertStatus(alert.status)}</span>
-            </Link>
-          ))
-        )}
-      </section>
-      <section className="card stack">
-        <h3>Handover</h3>
-        {handover ? (
-          <>
-            <p className="notice notice-info">
-              Generated summary, not an operator's original words.
-            </p>
-            <p>{handover.summary}</p>
-            <Link to="/worker/shift">Open My Shift</Link>
-          </>
-        ) : (
-          <EmptyState
-            title="No handover is available"
-            message="Nothing has been published for this organisation in the current session."
-          />
-        )}
-      </section>
+            ))
+          )}
+        </section>
+
+        <section className="card stack dashboard-pair-panel">
+          <h3>Shift handover</h3>
+          {handover ? (
+            <>
+              <p className="notice notice-info">
+                Generated summary, not an operator&apos;s original words.
+              </p>
+              <p>{handover.summary}</p>
+              {temporary ? null : (
+                <Link to="/worker/shift">Review shift handover</Link>
+              )}
+            </>
+          ) : (
+            <EmptyState
+              title="No handover to review"
+              message="Nothing has been published for your shift yet."
+            />
+          )}
+        </section>
+      </div>
     </div>
   );
 }

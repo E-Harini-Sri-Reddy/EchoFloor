@@ -477,13 +477,12 @@ export function VoiceAssistantPage({ role }: { role: "admin" | "worker" }) {
   }
 
   return (
-    <div className="page voice-layout">
-      <header className="page-header">
+    <div className="page voice-layout voice-compact">
+      <header className="page-header voice-compact-header">
         <div>
           <h2>Voice Assistant</h2>
           <p className="lede">
-            Ask about recorded history or submit a new report. EchoFloor will not change
-            machine settings.
+            Ask about a machine or submit a report. Settings stay unchanged.
           </p>
         </div>
         <StatusBadge
@@ -495,7 +494,7 @@ export function VoiceAssistantPage({ role }: { role: "admin" | "worker" }) {
         {PHASE_LABEL[phase]}
         {phase === "recording" ? `, ${seconds} seconds` : ""}
       </p>
-      <section className="card stack">
+      <section className="card stack voice-panel">
         <Field label="Machine" htmlFor="voice-machine" error={fieldErrors.machineId}>
           <select
             id="voice-machine"
@@ -515,19 +514,14 @@ export function VoiceAssistantPage({ role }: { role: "admin" | "worker" }) {
           </select>
         </Field>
         {machine ? (
-          <p>
-            Context: <strong className="mono">{machine.machineCode}</strong> —{" "}
-            {machine.name}
-            {fromNfc ? " · Opened from a demonstration NFC link." : ""}
+          <p className="muted voice-context">
+            <strong className="mono">{machine.machineCode}</strong> — {machine.name}
+            {fromNfc ? " · NFC link" : ""}
           </p>
         ) : (
-          <p className="muted">
-            Choose a machine before asking a machine-specific question.
-          </p>
+          <p className="muted voice-context">Choose a machine for context.</p>
         )}
-      </section>
-      <section className="card stack">
-        <div className="row">
+        <div className="voice-mic-center">
           {phase === "recording" ? (
             <button
               type="button"
@@ -547,16 +541,16 @@ export function VoiceAssistantPage({ role }: { role: "admin" | "worker" }) {
               Record
             </button>
           )}
-          <div>
+          <div className="voice-mic-status">
             <strong>{PHASE_LABEL[phase]}</strong>
             <p className="muted">
               {phase === "recording"
-                ? `Capturing audio · ${seconds}s. Audio is not sent anywhere in this preview.`
-                : "The microphone is used only when you press Record."}
+                ? `Capturing · ${seconds}s`
+                : "Mic is used only when you press Record."}
             </p>
             {phase === "recording" ? (
               <Button variant="tertiary" onClick={cancelRecording}>
-                Cancel recording
+                Cancel
               </Button>
             ) : null}
           </div>
@@ -569,6 +563,8 @@ export function VoiceAssistantPage({ role }: { role: "admin" | "worker" }) {
         <Field label="Or type a question or report" htmlFor="voice-text">
           <textarea
             id="voice-text"
+            className="voice-text-input"
+            rows={2}
             value={text}
             disabled={phase === "recording" || phase === "submitting"}
             placeholder="Has this machine had a pressure error before?"

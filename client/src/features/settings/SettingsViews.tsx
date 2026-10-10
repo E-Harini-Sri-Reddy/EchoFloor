@@ -16,6 +16,11 @@ import {
 import { memberRows } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import {
+  apiAddMember,
+  apiLeaveOrganisation,
+  apiRemoveMember,
+} from "@/services/apiClient";
+import {
   fetchHealth,
   getClientConfig,
   type HealthPayload,
@@ -35,7 +40,6 @@ export function SettingsPage({ role }: { role: "admin" | "worker" }) {
     role === "admin"
       ? [
           ["organisation", "Organisation"],
-          ["members", "Members"],
           ["account", "Account"],
           ["integrations", "Integrations"],
         ]
@@ -51,7 +55,7 @@ export function SettingsPage({ role }: { role: "admin" | "worker" }) {
           <h2>Settings</h2>
           <p className="lede">
             {role === "admin"
-              ? "Organisation changes in this preview stay in the browser session."
+              ? "Organisation and account settings. Members are managed under Users."
               : "Personal settings only. Organisation configuration is not available to workers."}
           </p>
         </div>
@@ -71,12 +75,27 @@ export function SettingsPage({ role }: { role: "admin" | "worker" }) {
         ))}
       </div>
       {section === "organisation" && role === "admin" ? <OrganisationSettings /> : null}
-      {section === "members" && role === "admin" ? <MemberSettings /> : null}
       {section === "account" ? <AccountSettings /> : null}
       {section === "notifications" && role === "worker" ? (
         <AccountSettings notificationsOnly />
       ) : null}
       {section === "integrations" && role === "admin" ? <IntegrationSettings /> : null}
+    </div>
+  );
+}
+
+export function UsersPage() {
+  return (
+    <div className="page">
+      <header className="page-header">
+        <div>
+          <h2>Users</h2>
+          <p className="lede">
+            Add members and manage worker access for this organisation.
+          </p>
+        </div>
+      </header>
+      <MemberSettings />
     </div>
   );
 }
@@ -159,6 +178,8 @@ function MemberSettings() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
   if (!session) return null;
   const members = memberRows(db, session.organisationId);
   const invitations = db.invitations.filter(
@@ -173,43 +194,98 @@ function MemberSettings() {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!session) return;
+    const activeSession = session;
     setSaving(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    const result = demoStore.inviteWorker({
-      email,
-      temporaryPassword,
-      workerAccessType,
-      accessDuration,
-      customExpiresAt: accessDuration === "custom" ? customExpiresAt : undefined,
-    });
-    setSaving(false);
-    if (!result.ok) {
-      setErrors(result.fieldErrors ?? { email: result.message });
-      return;
+    try {
+      if (activeSession.live) {
+        const result = await apiAddMember({
+          organisationId: activeSession.organisationId,
+          addedBy: activeSession.userId,
+          email,
+          temporaryPassword,
+          workerAccessType,
+          accessDuration,
+          customExpiresAt: accessDuration === "custom" ? customExpiresAt : undefined,
+        });
+        if (!result.ok) {
+          setErrors(result.fieldErrors ?? { email: result.message });
+          return;
+        }
+        demoStore.hydrateLive(result.data.workspace, result.data.session);
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        const result = demoStore.addMember({
+          email,
+          temporaryPassword,
+          workerAccessType,
+          accessDuration,
+          customExpiresAt: accessDuration === "custom" ? customExpiresAt : undefined,
+        });
+        if (!result.ok) {
+          setErrors(result.fieldErrors ?? { email: result.message });
+          return;
+        }
+      }
+      setErrors({});
+      setEmail("");
+      setTemporaryPassword("");
+      setWorkerAccessType("permanent");
+      setAccessDuration("until_removed");
+      setCustomExpiresAt("");
+      toast.push(
+        activeSession.live
+          ? `${labelWorkerAccessType(workerAccessType)} member saved to the database. They can sign in with the temporary password or Google on the same email.`
+          : `${labelWorkerAccessType(workerAccessType)} member recorded with a temporary password. They can also sign in with Google using the same email.`,
+      );
+    } finally {
+      setSaving(false);
     }
-    setErrors({});
-    setEmail("");
-    setTemporaryPassword("");
-    setWorkerAccessType("permanent");
-    setAccessDuration("until_removed");
-    setCustomExpiresAt("");
-    toast.push(
-      `${labelWorkerAccessType(workerAccessType)} access was recorded with a temporary password. They can also sign in with Google using the same email.`,
-    );
+  }
+
+  async function onRemoveMember(membershipId: string) {
+    if (!session) return;
+    setRemoveBusy(true);
+    try {
+      if (session.live) {
+        const result = await apiRemoveMember({
+          membershipId,
+          organisationId: session.organisationId,
+          removedBy: session.userId,
+          confirm: true,
+        });
+        if (!result.ok) {
+          toast.push(result.message);
+          return;
+        }
+        demoStore.hydrateLive(result.data.workspace, result.data.session);
+      } else {
+        const result = demoStore.removeMember(membershipId);
+        if (!result.ok) {
+          toast.push(result.message);
+          return;
+        }
+      }
+      setRemovingId(null);
+      toast.push("Member removed from the organisation.");
+    } finally {
+      setRemoveBusy(false);
+    }
   }
 
   return (
     <div className="stack">
       <form className="card form-grid" onSubmit={onSubmit} noValidate>
-        <h3>Invite a worker</h3>
+        <h3>Add a member</h3>
         <p className="muted">
-          Add their email and a temporary password. That creates the membership in this
-          browser session. They sign in with that password or with Google on the same email
-          (same user id). This form cannot assign an administrator.
+          Add their email and a temporary password. That creates their membership
+          {session.live ? " in the database" : " in this browser session"}. They sign in
+          with that password or with Google on the same email (same user id). This form
+          cannot assign an administrator.
         </p>
-        <Field label="Email" htmlFor="invite-email" error={errors.email}>
+        <Field label="Email" htmlFor="member-email" error={errors.email}>
           <TextInput
-            id="invite-email"
+            id="member-email"
             type="email"
             value={email}
             error={errors.email}
@@ -218,12 +294,12 @@ function MemberSettings() {
         </Field>
         <Field
           label="Temporary password"
-          htmlFor="invite-password"
+          htmlFor="member-password"
           error={errors.temporaryPassword}
           hint="At least 8 characters. Share it out of band; email delivery is not configured."
         >
           <TextInput
-            id="invite-password"
+            id="member-password"
             type="password"
             autoComplete="new-password"
             value={temporaryPassword}
@@ -231,9 +307,9 @@ function MemberSettings() {
             onChange={(event) => setTemporaryPassword(event.target.value)}
           />
         </Field>
-        <Field label="Worker type" htmlFor="invite-type">
+        <Field label="Member type" htmlFor="member-type">
           <select
-            id="invite-type"
+            id="member-type"
             value={workerAccessType}
             onChange={(event) =>
               onAccessTypeChange(event.target.value as WorkerAccessType)
@@ -245,16 +321,16 @@ function MemberSettings() {
         </Field>
         <Field
           label="Login access"
-          htmlFor="invite-duration"
+          htmlFor="member-duration"
           error={errors.accessDuration}
           hint={
             workerAccessType === "permanent"
-              ? "Permanent workers stay until manual removal. Use Suspend on their member card."
-              : "Temporary workers cannot be suspended. Access ends when the window expires."
+              ? "Permanent members stay until manual removal or until they leave. Use Suspend on their member card."
+              : "Temporary members cannot be suspended. Access ends when the window expires."
           }
         >
           <select
-            id="invite-duration"
+            id="member-duration"
             value={accessDuration}
             onChange={(event) =>
               setAccessDuration(event.target.value as WorkerAccessDuration)
@@ -273,9 +349,9 @@ function MemberSettings() {
           </select>
         </Field>
         {workerAccessType === "temporary" && accessDuration === "custom" ? (
-          <Field label="Access ends" htmlFor="invite-custom-end">
+          <Field label="Access ends" htmlFor="member-custom-end">
             <TextInput
-              id="invite-custom-end"
+              id="member-custom-end"
               type="datetime-local"
               value={customExpiresAt}
               onChange={(event) => setCustomExpiresAt(event.target.value)}
@@ -283,7 +359,7 @@ function MemberSettings() {
           </Field>
         ) : null}
         <Button type="submit" loading={saving}>
-          Add worker
+          Add member
         </Button>
       </form>
       <div className="stack">
@@ -370,15 +446,50 @@ function MemberSettings() {
                   onDone={() => setEditingId(null)}
                 />
               ) : null}
+              {membership.userId !== session.userId ? (
+                removingId === membership.id ? (
+                  <div className="stack">
+                    <p className="muted">
+                      Remove {user?.displayName ?? "this member"} from the organisation?
+                      They will lose access immediately.
+                    </p>
+                    <div className="row">
+                      <Button
+                        variant="destructive"
+                        loading={removeBusy}
+                        onClick={() => void onRemoveMember(membership.id)}
+                      >
+                        Confirm remove
+                      </Button>
+                      <Button
+                        variant="tertiary"
+                        disabled={removeBusy}
+                        onClick={() => setRemovingId(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="row">
+                    <Button
+                      variant="destructive"
+                      onClick={() => setRemovingId(membership.id)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                )
+              ) : null}
             </article>
           );
         })}
       </div>
-      <h3>Invitations</h3>
+      <h3>Recently added</h3>
       {invitations.length === 0 ? (
         <EmptyState
-          title="No invitations"
-          message="Added workers are recorded here. Tokens are not shown."
+          title="No recent adds"
+          message="Members you add are listed here for reference."
         />
       ) : (
         invitations.map((invitation) => (
@@ -496,6 +607,9 @@ function AccountSettings({ notificationsOnly = false }: { notificationsOnly?: bo
   const session = db.session;
   const toast = useToast();
   const prefs = session ? db.preferences[session.userId] : undefined;
+  const organisation = session
+    ? db.organisations.find((item) => item.id === session.organisationId)
+    : undefined;
   const [displayName, setDisplayName] = useState(session?.displayName ?? "");
   const [emailAlerts, setEmailAlerts] = useState(prefs?.emailAlerts ?? false);
   const [showVoiceTextFirst, setShowVoiceTextFirst] = useState(
@@ -503,6 +617,9 @@ function AccountSettings({ notificationsOnly = false }: { notificationsOnly?: bo
   );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [leaveStep, setLeaveStep] = useState<0 | 1 | 2>(0);
+  const [leaving, setLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState("");
   if (!session) return null;
 
   async function onSubmit(event: FormEvent) {
@@ -523,56 +640,165 @@ function AccountSettings({ notificationsOnly = false }: { notificationsOnly?: bo
     toast.push("Account preferences saved in this browser session.");
   }
 
+  async function confirmLeaveOrganisation() {
+    if (!session) return;
+    setLeaving(true);
+    setLeaveError("");
+    try {
+      if (session.live) {
+        const result = await apiLeaveOrganisation({
+          userId: session.userId,
+          organisationId: session.organisationId,
+          confirm: true,
+        });
+        if (!result.ok) {
+          setLeaveError(result.message);
+          setLeaveStep(1);
+          return;
+        }
+        demoStore.logout();
+      } else {
+        const result = demoStore.leaveOrganisation();
+        if (!result.ok) {
+          setLeaveError(result.message);
+          setLeaveStep(1);
+          return;
+        }
+      }
+      toast.push("You left the organisation.");
+      window.location.assign("/");
+    } finally {
+      setLeaving(false);
+    }
+  }
+
   return (
-    <form className="card form-grid" onSubmit={onSubmit} noValidate>
+    <div className="stack">
+      <form className="card form-grid" onSubmit={onSubmit} noValidate>
+        {notificationsOnly ? null : (
+          <>
+            <Field label="Name" htmlFor="account-name" error={error}>
+              <TextInput
+                id="account-name"
+                value={displayName}
+                error={error}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </Field>
+            <Field
+              label="Email"
+              htmlFor="account-email"
+              hint="Email changes are not available in this preview."
+            >
+              <TextInput id="account-email" value={session.email} readOnly />
+            </Field>
+          </>
+        )}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={emailAlerts}
+            onChange={(event) => setEmailAlerts(event.target.checked)}
+          />
+          Email alert preference (not delivered; no mail provider is configured)
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={showVoiceTextFirst}
+            onChange={(event) => setShowVoiceTextFirst(event.target.checked)}
+          />
+          Prefer typing over the microphone
+        </label>
+        <Button type="submit" loading={saving}>
+          Save account
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            demoStore.logout();
+            window.location.assign("/");
+          }}
+        >
+          Sign out
+        </Button>
+      </form>
+
       {notificationsOnly ? null : (
-        <>
-          <Field label="Name" htmlFor="account-name" error={error}>
-            <TextInput
-              id="account-name"
-              value={displayName}
-              error={error}
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
-          </Field>
-          <Field
-            label="Email"
-            htmlFor="account-email"
-            hint="Email changes are not available in this preview."
-          >
-            <TextInput id="account-email" value={session.email} readOnly />
-          </Field>
-        </>
+        <section className="card stack">
+          <h3>Leave organisation</h3>
+          <p className="muted">
+            Leave {organisation?.name ?? "this organisation"}. You will lose access until an
+            administrator adds you again. This requires two confirmations.
+          </p>
+          {leaveError ? (
+            <p className="notice notice-danger" role="alert">
+              {leaveError}
+            </p>
+          ) : null}
+          {leaveStep === 0 ? (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setLeaveError("");
+                setLeaveStep(1);
+              }}
+            >
+              Leave organisation
+            </Button>
+          ) : null}
+          {leaveStep === 1 ? (
+            <div className="stack">
+              <p className="notice">
+                First confirmation: you are about to leave{" "}
+                <strong>{organisation?.name ?? "this organisation"}</strong>. Continue only if
+                you intend to remove your own access.
+              </p>
+              <div className="row">
+                <Button variant="secondary" onClick={() => setLeaveStep(2)}>
+                  Continue
+                </Button>
+                <Button
+                  variant="tertiary"
+                  onClick={() => {
+                    setLeaveStep(0);
+                    setLeaveError("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {leaveStep === 2 ? (
+            <div className="stack">
+              <p className="notice notice-danger">
+                Second confirmation: leave now? This cannot be undone from your account.
+              </p>
+              <div className="row">
+                <Button
+                  variant="secondary"
+                  loading={leaving}
+                  onClick={() => void confirmLeaveOrganisation()}
+                >
+                  Yes, leave organisation
+                </Button>
+                <Button
+                  variant="tertiary"
+                  disabled={leaving}
+                  onClick={() => {
+                    setLeaveStep(0);
+                    setLeaveError("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </section>
       )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={emailAlerts}
-          onChange={(event) => setEmailAlerts(event.target.checked)}
-        />
-        Email alert preference (not delivered; no mail provider is configured)
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={showVoiceTextFirst}
-          onChange={(event) => setShowVoiceTextFirst(event.target.checked)}
-        />
-        Prefer typing over the microphone
-      </label>
-      <Button type="submit" loading={saving}>
-        Save account
-      </Button>
-      <Button
-        variant="secondary"
-        onClick={() => {
-          demoStore.logout();
-          window.location.assign("/");
-        }}
-      >
-        Sign out
-      </Button>
-    </form>
+    </div>
   );
 }
 

@@ -317,7 +317,7 @@ export function EntryPage() {
               <div>
                 <h2>Create an organisation</h2>
                 <p className="muted">
-                  The person who registers becomes the administrator. Workers are invited
+                  The person who registers becomes the administrator. Members are added
                   later with email and a temporary password. For Google sign-up, enter the
                   organisation name first.
                 </p>

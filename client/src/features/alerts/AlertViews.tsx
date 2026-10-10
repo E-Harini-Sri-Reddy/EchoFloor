@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Button, ButtonLink } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
 import { EmptyState } from "@/components/ui/States";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -55,7 +55,6 @@ export function AlertListPage({ role }: { role: "admin" | "worker" }) {
             ends.
           </p>
         </div>
-        <ButtonLink to={`${base}/report-issue`}>Report an issue</ButtonLink>
       </header>
       <div className="tabs" role="tablist" aria-label="Alert filters">
         {(
@@ -105,7 +104,6 @@ export function AlertListPage({ role }: { role: "admin" | "worker" }) {
         <EmptyState
           title="No active alerts"
           message="Nothing damaged, under maintenance, or unsafe matches this filter. Expired windows are removed automatically."
-          action={<ButtonLink to={`${base}/report-issue`}>Report an issue</ButtonLink>}
         />
       ) : (
         <div className="stack">
@@ -155,6 +153,8 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
   if (!session) return null;
   const alert = alertById(db, session.organisationId, alertId);
   const base = role === "admin" ? "/admin" : "/worker";
+  const alertsListPath =
+    role === "admin" ? "/admin/issues/alerts" : "/worker/issues/alerts";
   if (!alert) {
     return (
       <div className="page">
@@ -182,7 +182,7 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
     setPending(null);
     if (result.ok) {
       toast.push("Alert acknowledged. It left the notification badge.", {
-        to: `${base}/alerts`,
+        to: alertsListPath,
       });
     } else {
       toast.push(result.message);
@@ -204,7 +204,7 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
       <header className="page-header">
         <div>
           <p className="muted">
-            <Link to={`${base}/alerts`}>Live alerts</Link>
+            <Link to={alertsListPath}>Live alerts</Link>
           </p>
           <h2>{alert.title}</h2>
         </div>
@@ -237,7 +237,8 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
           <div
             className={
               alert.photoAiReview.status === "flagged_false" ||
-              alert.photoAiReview.status === "needs_admin_review"
+              alert.photoAiReview.status === "needs_admin_review" ||
+              alert.photoAiReview.status === "queued"
                 ? "notice notice-warning"
                 : "notice"
             }
@@ -245,11 +246,40 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
           >
             <strong>{labelIssuePhotoAiReview(alert.photoAiReview.status)}</strong>
             <p>{alert.photoAiReview.note}</p>
-            {role === "admin" ? (
-              <p className="muted">
-                When AI screening is connected, suspected false reports will surface here for
-                administrator follow-up.
-              </p>
+            {role === "admin" &&
+            (alert.photoAiReview.status === "needs_admin_review" ||
+              alert.photoAiReview.status === "flagged_false" ||
+              alert.photoAiReview.status === "queued") ? (
+              <div className="row" style={{ marginTop: "0.75rem" }}>
+                <Button
+                  onClick={() => {
+                    const result = demoStore.reviewIssuePhotoAi(alert.id, "cleared");
+                    toast.push(
+                      result.ok
+                        ? "Report approved. Photo screening marked cleared."
+                        : result.message,
+                    );
+                  }}
+                >
+                  Approve report
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const result = demoStore.reviewIssuePhotoAi(
+                      alert.id,
+                      "flagged_false",
+                    );
+                    toast.push(
+                      result.ok
+                        ? "Marked as a false report. The alert was dismissed."
+                        : result.message,
+                    );
+                  }}
+                >
+                  Mark false report
+                </Button>
+              </div>
             ) : null}
           </div>
         ) : null}

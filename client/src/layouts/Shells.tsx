@@ -20,43 +20,92 @@ interface NavItem {
   label: string;
   short: string;
   end?: boolean;
+  /** When set, used instead of default prefix matching for active state. */
+  isActive?: (pathname: string) => boolean;
 }
 
 const adminNav: NavItem[] = [
-  { to: "/admin", label: "Overview", short: "Overview", end: true },
+  {
+    to: "/admin",
+    label: "Overview & Voice",
+    short: "Home",
+    isActive: (pathname) => pathname === "/admin" || pathname === "/admin/voice",
+  },
   { to: "/admin/machines", label: "Machine Details", short: "Machines" },
   { to: "/admin/tasks", label: "Tasks", short: "Tasks" },
-  { to: "/admin/voice", label: "Voice Assistant", short: "Voice" },
-  { to: "/admin/report-issue", label: "Report Issue", short: "Report" },
+  {
+    to: "/admin/issues",
+    label: "Issues & Alerts",
+    short: "Issues",
+    isActive: (pathname) =>
+      pathname.startsWith("/admin/issues") ||
+      pathname === "/admin/report-issue" ||
+      pathname.startsWith("/admin/alerts"),
+  },
   { to: "/admin/memories", label: "Memory Explorer", short: "Memory" },
-  { to: "/admin/handover", label: "Shifts & Handover", short: "Shifts" },
-  { to: "/admin/alerts", label: "Live Alerts", short: "Alerts" },
+  { to: "/admin/handover", label: "Shifts & Handovers", short: "Shifts" },
+  { to: "/admin/users", label: "Users", short: "Users" },
   { to: "/admin/settings", label: "Settings", short: "Settings" },
 ];
 
 const permanentWorkerNav: NavItem[] = [
-  { to: "/worker", label: "Worker Dashboard", short: "Home", end: true },
+  {
+    to: "/worker/voice",
+    label: "Voice & Dashboard",
+    short: "Home",
+    isActive: (pathname) =>
+      pathname === "/worker" ||
+      pathname === "/worker/voice" ||
+      pathname === "/worker/dashboard",
+  },
   { to: "/worker/machines", label: "Machine Details", short: "Machines" },
   { to: "/worker/tasks", label: "My Tasks", short: "Tasks" },
-  { to: "/worker/voice", label: "Voice Assistant", short: "Voice" },
-  { to: "/worker/report-issue", label: "Report Issue", short: "Report" },
-  { to: "/worker/alerts", label: "Live Alerts", short: "Alerts" },
+  {
+    to: "/worker/issues",
+    label: "Issues & Alerts",
+    short: "Issues",
+    isActive: (pathname) =>
+      pathname.startsWith("/worker/issues") ||
+      pathname === "/worker/report-issue" ||
+      pathname.startsWith("/worker/alerts"),
+  },
   { to: "/worker/shift", label: "My Shift", short: "My Shift" },
   { to: "/worker/settings", label: "Settings", short: "Settings" },
 ];
 
 const temporaryWorkerNav: NavItem[] = [
-  { to: "/worker/voice", label: "Voice", short: "Voice" },
-  { to: "/worker/report-issue", label: "Report Issue", short: "Report" },
-  { to: "/worker/alerts", label: "Live Alerts", short: "Alerts" },
+  {
+    to: "/worker/voice",
+    label: "Voice & Dashboard",
+    short: "Home",
+    isActive: (pathname) =>
+      pathname === "/worker" ||
+      pathname === "/worker/voice" ||
+      pathname === "/worker/dashboard",
+  },
+  {
+    to: "/worker/issues",
+    label: "Issues & Alerts",
+    short: "Issues",
+    isActive: (pathname) =>
+      pathname.startsWith("/worker/issues") ||
+      pathname === "/worker/report-issue" ||
+      pathname.startsWith("/worker/alerts"),
+  },
   { to: "/worker/tasks", label: "Tasks", short: "Tasks" },
   { to: "/worker/history", label: "History", short: "History" },
   { to: "/worker/settings", label: "Settings", short: "Settings" },
 ];
 
-const adminMobile = ["Overview", "Machines", "Report", "Alerts"];
-const permanentWorkerMobile = ["Home", "Report", "Voice", "Alerts", "My Shift"];
-const temporaryWorkerMobile = ["Voice", "Report", "Alerts", "History"];
+const adminMobile = ["Home", "Machines", "Issues", "Users"];
+const permanentWorkerMobile = ["Home", "Issues", "Tasks", "My Shift"];
+const temporaryWorkerMobile = ["Home", "Issues", "Tasks", "History"];
+
+function isNavActive(item: NavItem, pathname: string) {
+  if (item.isActive) return item.isActive(pathname);
+  if (item.end) return pathname === item.to;
+  return pathname === item.to || pathname.startsWith(`${item.to}/`);
+}
 
 export function AdminShell() {
   return <Shell items={adminNav} mobileLabels={adminMobile} home="/admin" />;
@@ -69,7 +118,7 @@ export function WorkerShell() {
     <Shell
       items={temporary ? temporaryWorkerNav : permanentWorkerNav}
       mobileLabels={temporary ? temporaryWorkerMobile : permanentWorkerMobile}
-      home={temporary ? "/worker/voice" : "/worker"}
+      home="/worker/voice"
     />
   );
 }
@@ -141,9 +190,7 @@ function Shell({
   const overflowItems = items.filter(
     (item) => !mobileLabels.includes(item.short) && item.short !== "Settings",
   );
-  const current = items.find((item) =>
-    item.end ? location.pathname === item.to : location.pathname.startsWith(item.to),
-  );
+  const current = items.find((item) => isNavActive(item, location.pathname));
 
   return (
     <div className="app-shell">
@@ -164,9 +211,15 @@ function Shell({
           <ul className="nav-list">
             {items.map((item) => (
               <li key={item.to}>
-                <NavLink to={item.to} end={item.end} className="nav-link">
+                <Link
+                  to={item.to}
+                  className="nav-link"
+                  aria-current={
+                    isNavActive(item, location.pathname) ? "page" : undefined
+                  }
+                >
                   {item.label}
-                </NavLink>
+                </Link>
               </li>
             ))}
           </ul>
@@ -352,9 +405,16 @@ function Shell({
         </main>
         <nav className="bottom-nav" aria-label="Mobile">
           {mobileItems.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.end} className="bottom-link">
+            <Link
+              key={item.to}
+              to={item.to}
+              className="bottom-link"
+              aria-current={
+                isNavActive(item, location.pathname) ? "page" : undefined
+              }
+            >
               {item.short}
-            </NavLink>
+            </Link>
           ))}
           {overflowItems.length > 0 ? (
             <button

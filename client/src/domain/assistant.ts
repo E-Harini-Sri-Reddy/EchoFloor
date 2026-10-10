@@ -119,3 +119,18 @@ export function suggestReportTitle(transcript: string): string {
   if (cleaned.length <= 72) return cleaned;
   return `${cleaned.slice(0, 69).trimEnd()}…`;
 }
+
+/**
+ * Brief task blurb for dashboard cards. Stand-in until an AI provider is wired;
+ * compresses a longer description into one short line.
+ */
+export function summarizeTaskDescription(description: string): string | null {
+  const cleaned = description.trim().replace(/\s+/g, " ");
+  if (!cleaned) return null;
+  const firstSentence = cleaned.split(/(?<=[.!?])\s+/)[0] ?? cleaned;
+  const brief =
+    firstSentence.length <= 120
+      ? firstSentence
+      : `${firstSentence.slice(0, 117).trimEnd()}…`;
+  return brief;
+}

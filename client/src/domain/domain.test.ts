@@ -19,6 +19,7 @@ import {
   loginWithPassword,
   registerOrganisation,
   registerOrganisationWithGoogle,
+  removeMember,
   reportMachineIssue,
   setPermanentWorkerSuspension,
   updateMemory,
@@ -369,7 +370,9 @@ describe("permanent and temporary worker access", () => {
       expect(luis.db.session?.workerAccessType).toBe("permanent");
       expect(isTemporaryWorker(anita.db.session)).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/voice")).toBe(true);
+      expect(temporaryWorkerMayOpen("/worker/dashboard")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/history")).toBe(true);
+      expect(temporaryWorkerMayOpen("/worker/issues")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/alerts")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/report-issue")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/summary")).toBe(false);
@@ -395,7 +398,27 @@ describe("permanent and temporary worker access", () => {
     expect(tempSuspend.ok).toBe(false);
   });
 
-  it("records temporary invites with an access end and keeps work logs summary-only", () => {
+  it("lets an admin remove a worker and blocks self-removal", () => {
+    const admin = asAdmin(createSeed());
+    const luisMembership = admin.memberships.find((item) => item.userId === IDS.luis);
+    const adminMembership = admin.memberships.find((item) => item.userId === IDS.priya);
+    if (!luisMembership || !adminMembership) throw new Error("missing membership");
+
+    const selfRemove = removeMember(admin, adminMembership.id);
+    expect(selfRemove.ok).toBe(false);
+
+    const removed = removeMember(admin, luisMembership.id);
+    expect(removed.ok).toBe(true);
+    if (removed.ok) {
+      expect(
+        removed.db.memberships.find((item) => item.id === luisMembership.id)?.status,
+      ).toBe("removed");
+      const blocked = loginAsEmail(removed.db, "worker@northstar.example");
+      expect(blocked.ok).toBe(false);
+    }
+  });
+
+  it("records temporary members with an access end and keeps work logs summary-only", () => {
     const admin = asAdmin(createSeed());
     const invited = inviteWorker(admin, {
       email: "temp.hire@northstar.example",

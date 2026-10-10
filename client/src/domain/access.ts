@@ -146,14 +146,15 @@ export function loginBlockedMessage(
 
 export function homePathForSession(session: Session): string {
   if (session.role === "admin") return "/admin";
-  if (session.workerAccessType === "temporary") return "/worker/voice";
-  return "/worker";
+  return "/worker/voice";
 }
 
 export function temporaryWorkerMayOpen(pathname: string): boolean {
   if (!pathname.startsWith("/worker")) return false;
   const allowed = [
     "/worker/voice",
+    "/worker/dashboard",
+    "/worker/issues",
     "/worker/report-issue",
     "/worker/alerts",
     "/worker/history",

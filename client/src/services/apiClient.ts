@@ -126,6 +126,77 @@ export async function apiRefreshWorkspace(
   }
 }
 
+export async function apiAddMember(input: {
+  organisationId: string;
+  addedBy: string;
+  email: string;
+  temporaryPassword: string;
+  workerAccessType: "permanent" | "temporary";
+  accessDuration: string;
+  customExpiresAt?: string;
+}): Promise<{ ok: true; data: AuthWorkspacePayload } | AuthFail> {
+  const { apiBaseUrl } = getClientConfig();
+  try {
+    const response = await fetch(`${apiBaseUrl}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await parseJson(response);
+    if (!response.ok || !body.success || !body.data || !("session" in body.data)) {
+      return authFailure(body, "Could not add the member.");
+    }
+    return { ok: true, data: body.data as AuthWorkspacePayload };
+  } catch {
+    return NETWORK_ERROR;
+  }
+}
+
+export async function apiLeaveOrganisation(input: {
+  userId: string;
+  organisationId: string;
+  confirm: boolean;
+}): Promise<{ ok: true } | AuthFail> {
+  const { apiBaseUrl } = getClientConfig();
+  try {
+    const response = await fetch(`${apiBaseUrl}/memberships/leave`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await parseJson(response);
+    if (!response.ok || !body.success) {
+      return authFailure(body, "Could not leave the organisation.");
+    }
+    return { ok: true };
+  } catch {
+    return NETWORK_ERROR;
+  }
+}
+
+export async function apiRemoveMember(input: {
+  membershipId: string;
+  organisationId: string;
+  removedBy: string;
+  confirm: boolean;
+}): Promise<{ ok: true; data: AuthWorkspacePayload } | AuthFail> {
+  const { apiBaseUrl } = getClientConfig();
+  try {
+    const response = await fetch(`${apiBaseUrl}/memberships/remove`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await parseJson(response);
+    if (!response.ok || !body.success || !body.data || !("session" in body.data)) {
+      return authFailure(body, "Could not remove the member.");
+    }
+    return { ok: true, data: body.data as AuthWorkspacePayload };
+  } catch {
+    return NETWORK_ERROR;
+  }
+}
+
 export async function apiCreateMachine(input: {
   organisationId: string;
   createdBy: string;

@@ -219,6 +219,23 @@ export function unresolvedMemories(memories: MemoryRecord[]): MemoryRecord[] {
   );
 }
 
+/** Issue reports whose photos need administrator approve/deny after AI screening. */
+export function photoReviewsNeedingAdmin(
+  db: DemoDatabase,
+  organisationId: string,
+): Alert[] {
+  return db.alerts
+    .filter(
+      (alert) =>
+        alert.organisationId === organisationId &&
+        (alert.status === "open" || alert.status === "acknowledged") &&
+        (alert.photoAiReview?.status === "needs_admin_review" ||
+          alert.photoAiReview?.status === "flagged_false" ||
+          alert.photoAiReview?.status === "queued"),
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 export function latestMemoryForMachine(memories: MemoryRecord[], machineId: string) {
   return memories
     .filter((memory) => memory.machineId === machineId)
