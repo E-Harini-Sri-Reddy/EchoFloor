@@ -9,7 +9,8 @@ services:
     plan: free
     region: oregon
     rootDir: .
-    buildCommand: npm install && npm run build:render
+    # NODE_ENV=production would skip Vite/TypeScript (devDependencies); force them in for the build.
+    buildCommand: npm install --include=dev && npm run build:render
     startCommand: npm start
     healthCheckPath: /api/v1/health
     envVars:

@@ -46,8 +46,9 @@ npm run build
 The app deploys as a single Render web service (API + built client). See **[DEPLOY_RENDER.md](./DEPLOY_RENDER.md)** for Atlas network access, Blueprint/`render.yaml` steps, env vars, and Google origin setup.
 
 ```bash
-npm run build:render   # client + server
-npm start              # serves API and client/dist on PORT
+npm install --include=dev   # needed on Render when NODE_ENV=production
+npm run build:render        # client + server
+npm start                   # serves API and client/dist on PORT
 ```
 
 ## Not connected yet

@@ -32,7 +32,7 @@ EchoFloor deploys as **one** Render web service: Express serves `/api/v1/*` and 
 1. **New** → **Web Service** → connect the repo.
 2. Settings:
    - **Runtime:** Node  
-   - **Build command:** `npm install && npm run build:render`  
+   - **Build command:** `npm install --include=dev && npm run build:render`  
    - **Start command:** `npm start`  
    - **Health check path:** `/api/v1/health`
 3. Environment variables (same as in `render.yaml`), including:

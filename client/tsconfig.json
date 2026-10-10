@@ -17,11 +17,10 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     },
-    "types": ["vite/client", "vitest/globals"]
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }
