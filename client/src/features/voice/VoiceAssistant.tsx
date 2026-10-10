@@ -43,7 +43,7 @@ const LIVE_CAPTION: Record<LivePhase, string> = {
   idle: "Tap start to unlock audio and begin.",
   listening: "Listening… ask about the selected machine.",
   hearing: "Hearing you…",
-  thinking: "Thinking… waiting for n8n.",
+  thinking: "Thinking… searching machine records.",
   speaking: "Speaking the answer.",
 };
 
@@ -270,8 +270,8 @@ function LiveVoiceAssistantPage({
         <StatusBadge status="info" label={LIVE_CAPTION[livePhase]} />
       </header>
       <p className="notice notice-info">
-        Speak and pause, or tap Hold to talk then Stop Listening to send. Answers come from
-        n8n vector search over machine memories.
+        Speak and pause, or tap Hold to talk then Stop Listening to send. Answers use n8n when
+        available, otherwise MongoDB vector search over this machine&apos;s memories and issues.
       </p>
       <p className="sr-only" aria-live="polite">
         {LIVE_CAPTION[livePhase]}

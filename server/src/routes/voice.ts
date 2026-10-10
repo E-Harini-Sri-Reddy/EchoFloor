@@ -5,14 +5,16 @@ import type { AppConfig } from "../config/env.js";
 import { asObjectId, toId } from "../db/ids.js";
 import { getDb } from "../db/mongo.js";
 import { requireLiveSession } from "../middleware/requireLiveSession.js";
+import { answerMachineFromMongo } from "../services/machineVoiceFallback.js";
 import { N8nClientError, isN8nConfigured, postMultipart } from "../services/n8nClient.js";
 import {
   createWorkflowRequest,
-  failWorkflowRequest,
   findWorkflowRequest,
 } from "../services/workflowRequests.js";
 import { validateAudioUpload, VOICE_AUDIO_MAX_BYTES } from "../util/audioUpload.js";
 import { assertN8nSafeId, newN8nRequestId } from "../util/n8nIds.js";
+
+const N8N_PENDING_FALLBACK_MS = 20_000;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -83,6 +85,46 @@ async function buildEvidenceResponse(
   return { requestId, answer, evidence };
 }
 
+async function respondWithMongoFallback(
+  db: NonNullable<ReturnType<typeof getDb>>,
+  config: AppConfig,
+  input: {
+    requestId: string;
+    organisationId: ObjectId;
+    machineId: ObjectId;
+  },
+  response: Response,
+) {
+  const fallback = await answerMachineFromMongo(db, config, {
+    organisationId: input.organisationId,
+    machineId: input.machineId,
+  });
+  // Allow pending or previously-failed requests to complete with Mongo results.
+  await db.collection("workflow_requests").updateOne(
+    { requestId: input.requestId },
+    {
+      $set: {
+        status: "completed",
+        result: {
+          answer: fallback.answer,
+          evidenceRecordIds: fallback.evidenceRecordIds,
+          source: fallback.source,
+        },
+        completedAt: new Date(),
+      },
+      $unset: { errorMessage: "" },
+    },
+  );
+  response.json({
+    success: true,
+    data: {
+      requestId: input.requestId,
+      answer: fallback.answer,
+      evidence: fallback.evidence,
+    },
+  });
+}
+
 export function registerVoiceRoutes(app: Express, config: AppConfig) {
   const prefix = `${config.apiPrefix}/voice`;
 
@@ -99,13 +141,6 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           response.status(503).json({
             success: false,
             error: { code: "UNAVAILABLE", message: "MongoDB is not connected." },
-          });
-          return;
-        }
-        if (!isN8nConfigured(config) || !config.n8nVoiceQuestionWebhookUrl) {
-          response.status(503).json({
-            success: false,
-            error: { code: "UNAVAILABLE", message: "Voice assistant is not configured." },
           });
           return;
         }
@@ -127,6 +162,10 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           return;
         }
 
+        const organisationId = asObjectId(session.organisationId)!;
+        const userId = asObjectId(session.userId)!;
+        const machineId = machineCheck.machineId;
+
         const audio = validateAudioUpload(request.file, VOICE_AUDIO_MAX_BYTES);
         if (!audio.ok) {
           response.status(400).json({
@@ -143,15 +182,28 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
         await createWorkflowRequest(db, {
           requestId,
           type: "voice_question",
-          organisationId: asObjectId(session.organisationId)!,
-          userId: asObjectId(session.userId)!,
-          machineId: machineCheck.machineId,
+          organisationId,
+          userId,
+          machineId,
         });
+
+        const n8nReady =
+          isN8nConfigured(config) && Boolean(config.n8nVoiceQuestionWebhookUrl);
+
+        if (!n8nReady) {
+          await respondWithMongoFallback(
+            db,
+            config,
+            { requestId, organisationId, machineId },
+            response,
+          );
+          return;
+        }
 
         try {
           await postMultipart(
             config,
-            config.n8nVoiceQuestionWebhookUrl,
+            config.n8nVoiceQuestionWebhookUrl!,
             {
               machineId: machineIdRaw,
               organisationId: session.organisationId,
@@ -170,13 +222,13 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
                 ? "Voice request timed out waiting for n8n."
                 : error.message
               : "Voice assistant is temporarily unavailable.";
-          await failWorkflowRequest(db, requestId, message);
-          const status =
-            error instanceof N8nClientError && error.code === "TIMEOUT" ? 504 : 502;
-          response.status(status).json({
-            success: false,
-            error: { code: "UNAVAILABLE", message },
-          });
+          console.warn(`n8n voice question failed; using Mongo fallback: ${message}`);
+          await respondWithMongoFallback(
+            db,
+            config,
+            { requestId, organisationId, machineId },
+            response,
+          );
           return;
         }
 
@@ -201,13 +253,13 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           return;
         }
         if (refreshed.status === "failed") {
-          response.status(502).json({
-            success: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "Voice assistant could not complete the request.",
-            },
-          });
+          console.warn("n8n marked voice question failed; using Mongo fallback.");
+          await respondWithMongoFallback(
+            db,
+            config,
+            { requestId, organisationId, machineId },
+            response,
+          );
           return;
         }
         response.status(202).json({
@@ -370,6 +422,32 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           });
           return;
         }
+        const organisationId = asObjectId(session.organisationId);
+        const machineId = doc.machineId ? asObjectId(toId(doc.machineId)) : null;
+        const createdAt =
+          doc.createdAt instanceof Date ? doc.createdAt.getTime() : Date.now();
+        const pendingTooLong =
+          doc.status === "pending" && Date.now() - createdAt >= N8N_PENDING_FALLBACK_MS;
+
+        if (
+          (doc.status === "failed" || pendingTooLong) &&
+          organisationId &&
+          machineId
+        ) {
+          console.warn(
+            `voice question ${requestId} ${doc.status}${
+              pendingTooLong ? " (stale pending)" : ""
+            }; using Mongo fallback.`,
+          );
+          await respondWithMongoFallback(
+            db,
+            config,
+            { requestId, organisationId, machineId },
+            response,
+          );
+          return;
+        }
+
         if (doc.status === "pending") {
           response.status(202).json({
             success: true,

@@ -27,6 +27,8 @@ export interface AppConfig {
   embeddingModel: string | null;
   embeddingDimensions: number;
   embeddingBackfillDelayMs: number;
+  /** Atlas Vector Search index on `memories.embedding`. */
+  atlasVectorIndexName: string;
   speechProvider: string | null;
   speechApiKey: string | null;
   audioMaxBytes: number;
@@ -162,6 +164,15 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     blankToNull(source.N8N_ALERT_WEBHOOK_URL) ??
     (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-alert-processing") : null);
 
+  const voyageKey = blankToNull(source.VOYAGE_API_KEY);
+  const embeddingProvider =
+    blankToNull(source.EMBEDDING_PROVIDER) ?? (voyageKey ? "voyage" : null);
+  const embeddingApiKey =
+    blankToNull(source.EMBEDDING_API_KEY) ?? voyageKey ?? blankToNull(source.AI_API_KEY);
+  const embeddingModel =
+    blankToNull(source.EMBEDDING_MODEL) ??
+    (embeddingProvider?.startsWith("voyage") ? "voyage-3-lite" : null);
+
   return {
     nodeEnv,
     port,
@@ -177,11 +188,13 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     aiProvider: blankToNull(source.AI_PROVIDER),
     aiApiKey: blankToNull(source.AI_API_KEY),
     aiModel: blankToNull(source.AI_MODEL),
-    embeddingProvider: blankToNull(source.EMBEDDING_PROVIDER),
-    embeddingApiKey: blankToNull(source.EMBEDDING_API_KEY),
-    embeddingModel: blankToNull(source.EMBEDDING_MODEL),
+    embeddingProvider,
+    embeddingApiKey,
+    embeddingModel,
     embeddingDimensions,
     embeddingBackfillDelayMs,
+    atlasVectorIndexName:
+      blankToNull(source.ATLAS_VECTOR_INDEX_NAME) ?? "echofloor_memories_vector_index",
     speechProvider: blankToNull(source.SPEECH_PROVIDER),
     speechApiKey: blankToNull(source.SPEECH_API_KEY),
     audioMaxBytes,
@@ -212,13 +225,14 @@ export function isN8nIntegrationConfigured(config: AppConfig): boolean {
 }
 
 export function integrationReport(config: AppConfig): IntegrationReport {
-  const embeddingKey = config.embeddingApiKey ?? config.aiApiKey;
   return {
     mongodb: flag(Boolean(config.mongodbUri)),
     googleOAuth: flag(Boolean(config.googleClientId)),
     ai: flag(Boolean(config.aiProvider && config.aiApiKey && config.aiModel)),
     embeddings: flag(
-      Boolean(config.embeddingModel && embeddingKey && config.embeddingDimensions),
+      Boolean(
+        config.embeddingModel && config.embeddingApiKey && config.embeddingDimensions,
+      ),
     ),
     speech: flag(Boolean(config.speechProvider && config.speechApiKey)),
     n8n: flag(isN8nIntegrationConfigured(config)),

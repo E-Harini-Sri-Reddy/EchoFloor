@@ -80,12 +80,15 @@ export async function postMultipart(
     for (const [key, value] of Object.entries(fields)) {
       form.append(key, value);
     }
-    // Prefer File so Node's undici sets a proper multipart filename + type.
+    // Blob/File both work with undici FormData; Blob is more portable across Node versions.
     const bytes = Uint8Array.from(audio.buffer);
-    const file = new File([bytes], audio.filename, {
-      type: audio.mimetype || "application/octet-stream",
-    });
-    form.append("audioFile", file);
+    const blob =
+      typeof File !== "undefined"
+        ? new File([bytes], audio.filename, {
+            type: audio.mimetype || "application/octet-stream",
+          })
+        : new Blob([bytes], { type: audio.mimetype || "application/octet-stream" });
+    form.append("audioFile", blob, audio.filename);
 
     console.info(
       `n8n multipart POST ${url} fields=${Object.keys(fields).join(",")} bytes=${audio.buffer.length}`,

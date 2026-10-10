@@ -72,6 +72,7 @@ test("n8n integration reports configured with webhook key, callback secret, and 
   assert.equal(config.embeddingDimensions, 1024);
   assert.equal(config.embeddingBackfillDelayMs, 2500);
   assert.equal(config.n8nRequestTimeoutMs, 90000);
+  assert.equal(config.atlasVectorIndexName, "echofloor_memories_vector_index");
   assert.equal(integrationReport(config).n8n.status, "configured");
 });
 
