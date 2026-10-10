@@ -23,6 +23,11 @@ export function credentialsOf(db: DemoDatabase): Record<string, DemoCredential> 
   return db.credentials ?? {};
 }
 
+export function hasPasswordCredential(db: DemoDatabase, userId: string): boolean {
+  const credential = credentialsOf(db)[userId];
+  return Boolean(credential?.secret);
+}
+
 export function verifyPassword(
   db: DemoDatabase,
   userId: string,

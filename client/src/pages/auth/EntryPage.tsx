@@ -52,13 +52,17 @@ export function EntryPage() {
     const result = demoStore.loginWithPassword(login.email, login.password);
     setSubmitting(null);
     if (!result.ok || !result.db.session) {
-      setLoginErrors({
-        password: result.ok
-          ? "Email or password is incorrect."
-          : result.code === "FORBIDDEN"
-            ? result.message
-            : (result.fieldErrors?.password ?? result.message),
-      });
+      if (result.ok) {
+        setLoginErrors({ password: "Email or password is incorrect." });
+      } else if (result.code === "FORBIDDEN") {
+        setLoginErrors({ password: result.message });
+      } else {
+        const next: Record<string, string> = {};
+        if (result.fieldErrors?.email) next.email = result.fieldErrors.email;
+        if (result.fieldErrors?.password) next.password = result.fieldErrors.password;
+        if (!next.email && !next.password) next.password = result.message;
+        setLoginErrors(next);
+      }
       return;
     }
     navigate(homePathForSession(result.db.session));

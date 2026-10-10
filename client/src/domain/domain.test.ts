@@ -18,6 +18,7 @@ import {
   loginWithGoogle,
   loginWithPassword,
   registerOrganisation,
+  registerOrganisationWithGoogle,
   reportMachineIssue,
   setPermanentWorkerSuspension,
   updateMemory,
@@ -522,5 +523,37 @@ describe("auth providers", () => {
       "wrong-password",
     );
     expect(result.ok).toBe(false);
+  });
+
+  it("directs Google-only accounts to use Google instead of email password", () => {
+    const created = registerOrganisationWithGoogle(createSeed(), {
+      organisationName: "Google Only Org",
+      displayName: "Alex Admin",
+      email: "alex@googleonly.example",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const googleOnly = { ...created.db, session: null };
+
+    const withPassword = loginWithPassword(
+      googleOnly,
+      "alex@googleonly.example",
+      "any-password",
+    );
+    expect(withPassword.ok).toBe(false);
+    if (!withPassword.ok) {
+      expect(withPassword.fieldErrors?.email).toMatch(/Google/i);
+    }
+
+    const withGoogle = loginWithGoogle(googleOnly, "alex@googleonly.example");
+    expect(withGoogle.ok).toBe(true);
+  });
+
+  it("tells unmatched Google emails to use the invited address or ask an administrator", () => {
+    const result = loginWithGoogle(createSeed(), "someone.else@gmail.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.fieldErrors?.email).toMatch(/administrator|temporary password/i);
+    }
   });
 });

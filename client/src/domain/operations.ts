@@ -5,7 +5,13 @@ import {
   resolveAccessExpiry,
   workerAccessTypeOf,
 } from "@/domain/access";
-import { setCredential, verifyPassword, withAuthProvider } from "@/domain/credentials";
+import {
+  authProvidersOf,
+  hasPasswordCredential,
+  setCredential,
+  verifyPassword,
+  withAuthProvider,
+} from "@/domain/credentials";
 import { applyDraft } from "@/domain/memoryEdits";
 import { isConstraintActive } from "@/domain/constraints";
 import {
@@ -277,11 +283,35 @@ export function loginWithPassword(
 ): OperationResult<{ session: Session }> {
   const normalized = normalizeEmail(email);
   const user = db.users.find((candidate) => candidate.emailNormalized === normalized);
-  if (!user || user.status !== "active" || !verifyPassword(db, user.id, password)) {
+  if (!user || user.status !== "active") {
     return fail("VALIDATION", "Email or password is incorrect.", {
       password: "Email or password is incorrect.",
     });
   }
+
+  // Google-only accounts have no local credential (e.g. organisation signup via Google).
+  if (!hasPasswordCredential(db, user.id)) {
+    if (authProvidersOf(user).includes("google")) {
+      return fail(
+        "VALIDATION",
+        "This account was registered with Google. Please sign in with Google to continue.",
+        {
+          email:
+            "This account was registered with Google. Please use Sign in with Google instead of email and password.",
+        },
+      );
+    }
+    return fail("VALIDATION", "Email or password is incorrect.", {
+      password: "Email or password is incorrect.",
+    });
+  }
+
+  if (!verifyPassword(db, user.id, password)) {
+    return fail("VALIDATION", "Email or password is incorrect.", {
+      password: "Email or password is incorrect.",
+    });
+  }
+
   const linked = {
     ...db,
     users: db.users.map((candidate) =>
@@ -293,7 +323,7 @@ export function loginWithPassword(
 
 /**
  * Mock Google OAuth: resolve by email to the same user id as password sign-in.
- * Links the Google provider when the account already exists.
+ * Links the Google provider when the account already exists (same email).
  */
 export function loginWithGoogle(
   db: DemoDatabase,
@@ -309,8 +339,11 @@ export function loginWithGoogle(
   if (!user || user.status !== "active") {
     return fail(
       "NOT_FOUND",
-      "No EchoFloor account matches that Google email. Ask an administrator to invite you, or register an organisation.",
-      { email: "No account for that Google email in this browser session." },
+      "No EchoFloor account is linked to this Google email.",
+      {
+        email:
+          "No EchoFloor account is linked to this Google email. If you were invited under a different address, sign in with that email and the temporary password from your administrator, or ask them to confirm the correct sign-in method.",
+      },
     );
   }
   const linked = {
