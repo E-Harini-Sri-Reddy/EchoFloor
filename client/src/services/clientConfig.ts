@@ -2,6 +2,7 @@ export interface ClientConfig {
   appName: string;
   apiBaseUrl: string;
   dataSource: "mock" | "api";
+  googleClientId: string | null;
 }
 
 export function getClientConfig(): ClientConfig {
@@ -9,7 +10,8 @@ export function getClientConfig(): ClientConfig {
   const apiBaseUrl =
     import.meta.env.VITE_API_BASE_URL?.trim() || "http://localhost:5000/api/v1";
   const appName = import.meta.env.VITE_APP_NAME?.trim() || "EchoFloor";
-  return { appName, apiBaseUrl, dataSource };
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() || null;
+  return { appName, apiBaseUrl, dataSource, googleClientId };
 }
 
 export interface HealthPayload {

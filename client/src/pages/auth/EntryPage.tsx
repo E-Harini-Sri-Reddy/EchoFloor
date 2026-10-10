@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
 import { homePathForSession } from "@/domain/access";
+import { GoogleSignInButton } from "@/features/auth/GoogleSignInButton";
 import { DEMO_ACCOUNTS, DEMO_PASSWORD } from "@/fixtures/seed";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { demoStore } from "@/services/demoStore";
+import { isGoogleOAuthConfigured, type GoogleVerifiedIdentity } from "@/services/googleAuth";
 import { isEmail } from "@/utils/format";
 
 type AuthTab = "signin" | "register";
@@ -26,9 +28,8 @@ export function EntryPage() {
     password: "",
   });
   const [registerErrors, setRegisterErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState<
-    "login" | "register" | "google-login" | "google-register" | null
-  >(null);
+  const [submitting, setSubmitting] = useState<"login" | "register" | null>(null);
+  const googleConfigured = isGoogleOAuthConfigured();
 
   function enter(email: string) {
     const result = demoStore.login(email);
@@ -79,18 +80,9 @@ export function EntryPage() {
     navigate("/admin");
   }
 
-  async function onGoogleSignIn() {
-    const email = login.email.trim();
-    if (!isEmail(email)) {
-      setLoginErrors({
-        email: "Enter the Google account email first (preview stand-in for OAuth).",
-      });
-      return;
-    }
-    setSubmitting("google-login");
-    await wait();
-    const result = demoStore.loginWithGoogle(email);
-    setSubmitting(null);
+  async function onGoogleSignInVerified(identity: GoogleVerifiedIdentity) {
+    setLoginErrors({});
+    const result = demoStore.loginWithGoogle(identity.email);
     if (!result.ok || !result.db.session) {
       setLoginErrors({
         email: result.ok
@@ -103,27 +95,19 @@ export function EntryPage() {
     navigate(homePathForSession(result.db.session));
   }
 
-  async function onGoogleRegister() {
+  async function onGoogleRegisterVerified(identity: GoogleVerifiedIdentity) {
     const errors: Record<string, string> = {};
     if (register.organisationName.trim().length < 2) {
-      errors.organisationName = "Enter the organisation name.";
-    }
-    if (register.displayName.trim().length < 2) {
-      errors.displayName = "Enter your name.";
-    }
-    if (!isEmail(register.email)) {
-      errors.email = "Enter the Google account email.";
+      errors.organisationName = "Enter the organisation name before continuing with Google.";
     }
     setRegisterErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    setSubmitting("google-register");
-    await wait();
+
     const result = demoStore.registerWithGoogle({
       organisationName: register.organisationName,
-      displayName: register.displayName,
-      email: register.email,
+      displayName: register.displayName.trim() || identity.name || identity.email,
+      email: identity.email,
     });
-    setSubmitting(null);
     if (!result.ok) {
       setRegisterErrors(result.fieldErrors ?? {});
       return;
@@ -155,7 +139,11 @@ export function EntryPage() {
             <li>Email/password or Google, one user id</li>
           </ul>
         </div>
-        <p>Development preview. Authentication is not connected to a server.</p>
+        <p>
+          {googleConfigured
+            ? "Google ID tokens are verified by the EchoFloor API."
+            : "Development preview. Set Google OAuth client IDs in .env to enable Google sign-in."}
+        </p>
       </section>
       <main className="auth-main">
         <div className="notice">
@@ -163,8 +151,10 @@ export function EntryPage() {
           <p>
             Northstar Manufacturing example password:{" "}
             <span className="mono">{DEMO_PASSWORD}</span>. Invited workers use the
-            temporary password set by an administrator. Google sign-in is mocked: enter the
-            account email, then continue.
+            temporary password set by an administrator.
+            {googleConfigured
+              ? " Google uses the official Google button; the API verifies the ID token, then the session is linked by email to the same user id."
+              : " Google sign-in stays unavailable until VITE_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID are set."}
           </p>
           <div className="row" style={{ marginTop: 12 }}>
             {DEMO_ACCOUNTS.map((account) => (
@@ -256,15 +246,12 @@ export function EntryPage() {
               <div className="auth-divider" role="separator">
                 <span>or</span>
               </div>
-              <Button
-                type="button"
-                variant="secondary"
-                className="btn-google"
-                loading={submitting === "google-login"}
-                onClick={onGoogleSignIn}
-              >
-                Sign in with Google
-              </Button>
+              <GoogleSignInButton
+                mode="signin"
+                disabled={submitting !== null}
+                onVerified={onGoogleSignInVerified}
+                onError={(message) => setLoginErrors({ email: message })}
+              />
               <p className="muted">
                 Don&apos;t have an organisation?{" "}
                 <button type="button" className="text-link" onClick={() => setTab("register")}>
@@ -278,7 +265,8 @@ export function EntryPage() {
                 <h2>Create an organisation</h2>
                 <p className="muted">
                   The person who registers becomes the administrator. Workers are invited
-                  later with email and a temporary password.
+                  later with email and a temporary password. For Google sign-up, enter the
+                  organisation name first.
                 </p>
               </div>
               <Field
@@ -300,6 +288,7 @@ export function EntryPage() {
                 label="Your name"
                 htmlFor="admin-name"
                 error={registerErrors.displayName}
+                hint="Optional when using Google; Google profile name is used if blank."
               >
                 <TextInput
                   id="admin-name"
@@ -327,7 +316,7 @@ export function EntryPage() {
                 label="Password"
                 htmlFor="admin-password"
                 error={registerErrors.password}
-                hint="At least 8 characters. Stored only in this browser session."
+                hint="At least 8 characters for email/password registration. Not needed for Google."
               >
                 <div className="password-field">
                   <TextInput
@@ -356,15 +345,12 @@ export function EntryPage() {
               <div className="auth-divider" role="separator">
                 <span>or</span>
               </div>
-              <Button
-                type="button"
-                variant="secondary"
-                className="btn-google"
-                loading={submitting === "google-register"}
-                onClick={onGoogleRegister}
-              >
-                Sign up with Google
-              </Button>
+              <GoogleSignInButton
+                mode="signup"
+                disabled={submitting !== null}
+                onVerified={onGoogleRegisterVerified}
+                onError={(message) => setRegisterErrors({ email: message })}
+              />
               <p className="muted">
                 Already have an account?{" "}
                 <button type="button" className="text-link" onClick={() => setTab("signin")}>

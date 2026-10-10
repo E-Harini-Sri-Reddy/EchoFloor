@@ -911,6 +911,23 @@ p {
   background: #e8f0fe;
 }
 
+.google-signin {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: stretch;
+}
+
+.google-signin-host {
+  min-height: 44px;
+  display: flex;
+  justify-content: center;
+}
+
+.google-signin-host.is-disabled {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
 .form-grid {
   display: grid;
   gap: var(--space-3);

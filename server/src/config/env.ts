@@ -17,6 +17,8 @@ export interface AppConfig {
   mongodbDatabase: string;
   authSecret: string | null;
   authTokenExpiresIn: string;
+  googleClientId: string | null;
+  googleClientSecret: string | null;
   aiProvider: string | null;
   aiApiKey: string | null;
   aiModel: string | null;
@@ -39,6 +41,7 @@ export interface IntegrationStatus {
 
 export interface IntegrationReport {
   mongodb: IntegrationStatus;
+  googleOAuth: IntegrationStatus;
   ai: IntegrationStatus;
   embeddings: IntegrationStatus;
   speech: IntegrationStatus;
@@ -120,6 +123,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     mongodbDatabase: blankToNull(source.MONGODB_DATABASE) ?? "echofloor",
     authSecret: blankToNull(source.AUTH_SECRET),
     authTokenExpiresIn: blankToNull(source.AUTH_TOKEN_EXPIRES_IN) ?? "8h",
+    googleClientId: blankToNull(source.GOOGLE_CLIENT_ID),
+    googleClientSecret: blankToNull(source.GOOGLE_CLIENT_SECRET),
     aiProvider: blankToNull(source.AI_PROVIDER),
     aiApiKey: blankToNull(source.AI_API_KEY),
     aiModel: blankToNull(source.AI_MODEL),
@@ -146,6 +151,7 @@ export function integrationReport(config: AppConfig): IntegrationReport {
   const embeddingKey = config.embeddingApiKey ?? config.aiApiKey;
   return {
     mongodb: flag(Boolean(config.mongodbUri)),
+    googleOAuth: flag(Boolean(config.googleClientId)),
     ai: flag(Boolean(config.aiProvider && config.aiApiKey && config.aiModel)),
     embeddings: flag(
       Boolean(config.embeddingModel && embeddingKey && config.embeddingDimensions),
@@ -160,6 +166,7 @@ export function missingOptionalNames(config: AppConfig): string[] {
   const names: string[] = [];
   if (!report.mongodb.configured) names.push("MONGODB_URI");
   if (!config.authSecret) names.push("AUTH_SECRET");
+  if (!report.googleOAuth.configured) names.push("GOOGLE_CLIENT_ID");
   if (!report.ai.configured) names.push("AI_PROVIDER/AI_API_KEY/AI_MODEL");
   if (!report.embeddings.configured) names.push("EMBEDDING_MODEL");
   if (!report.speech.configured) names.push("SPEECH_PROVIDER/SPEECH_API_KEY");

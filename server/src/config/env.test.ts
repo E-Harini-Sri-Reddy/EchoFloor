@@ -10,6 +10,7 @@ test("development starts without credentials and reports integrations unavailabl
   assert.equal(config.aiApiKey, null);
   const report = integrationReport(config);
   assert.equal(report.mongodb.status, "unavailable");
+  assert.equal(report.googleOAuth.status, "unavailable");
   assert.equal(report.ai.status, "unavailable");
   assert.equal(report.speech.status, "unavailable");
   assert.equal(report.n8n.status, "unavailable");

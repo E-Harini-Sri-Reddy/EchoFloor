@@ -9,12 +9,13 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "tsx --test src/config/env.test.ts src/app.test.ts"
+    "test": "tsx --test src/config/env.test.ts src/auth/google.test.ts src/app.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "google-auth-library": "^11.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

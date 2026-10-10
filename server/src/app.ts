@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
+import { GoogleAuthError, verifyGoogleIdToken } from "./auth/google.js";
 import { integrationReport, type AppConfig } from "./config/env.js";
 
 export function createApp(config: AppConfig) {
@@ -33,9 +34,43 @@ export function createApp(config: AppConfig) {
         environment: config.nodeEnv,
         integrations,
         dataApi: "not_implemented",
-        note: "This milestone validates configuration and reports integration availability. Organisation data is not served by the API. The frontend mockup uses labeled browser-session fixtures when VITE_DATA_SOURCE=mock.",
+        googleClientIdConfigured: Boolean(config.googleClientId),
+        note: "This milestone validates configuration and reports integration availability. Organisation data is not served by the API. The frontend mockup uses labeled browser-session fixtures when VITE_DATA_SOURCE=mock. Google ID tokens are verified when GOOGLE_CLIENT_ID is set.",
       },
     });
+  });
+
+  app.post(`${config.apiPrefix}/auth/google`, async (request, response, next) => {
+    try {
+      const idToken =
+        typeof request.body?.idToken === "string" ? request.body.idToken : "";
+      const identity = await verifyGoogleIdToken(config.googleClientId, idToken);
+      response.json({
+        success: true,
+        data: {
+          provider: "google",
+          ...identity,
+        },
+      });
+    } catch (error) {
+      if (error instanceof GoogleAuthError) {
+        const status =
+          error.code === "UNAVAILABLE"
+            ? 503
+            : error.code === "EMAIL_UNVERIFIED"
+              ? 403
+              : 401;
+        response.status(status).json({
+          success: false,
+          error: {
+            code: error.code,
+            message: error.message,
+          },
+        });
+        return;
+      }
+      next(error);
+    }
   });
 
   app.use((_request, response) => {
