@@ -11,6 +11,8 @@ export interface LiveRecorderOptions {
   onPhase: (phase: VadPhase) => void;
   onUtterance: (blob: Blob) => void;
   isPaused?: () => boolean;
+  /** When true, never auto-start from ambient audio — only beginManualCapture(). */
+  manualOnly?: boolean;
 }
 
 export interface LiveRecorderHandle {
@@ -152,18 +154,30 @@ export async function createLiveRecorder(
         lastLoudAt = now;
         heardLoud = true;
       }
-      const silentLongEnough = now - lastLoudAt >= SILENCE_MS;
       const maxLen = now - speechStartedAt >= MAX_UTTERANCE_MS;
-      const neverSpoke =
-        !heardLoud && now - speechStartedAt >= NO_SPEECH_ABORT_MS;
-      if (maxLen || (heardLoud && silentLongEnough) || neverSpoke) {
-        void finishRecording(heardLoud || maxLen);
+      if (options.manualOnly) {
+        // Tap-to-talk: only auto-stop at max length; user taps Stop & send otherwise.
+        if (maxLen) void finishRecording(true);
+      } else {
+        const silentLongEnough = now - lastLoudAt >= SILENCE_MS;
+        const neverSpoke =
+          !heardLoud && now - speechStartedAt >= NO_SPEECH_ABORT_MS;
+        if (maxLen || (heardLoud && silentLongEnough) || neverSpoke) {
+          void finishRecording(heardLoud || maxLen);
+        }
       }
       raf = window.requestAnimationFrame(tick);
       return;
     }
 
-    if (!paused && phase === "listening" && !finishing && rms >= threshold) {
+    // Push-to-talk / tap-to-talk: do not flood from ambient room noise.
+    if (
+      !options.manualOnly &&
+      !paused &&
+      phase === "listening" &&
+      !finishing &&
+      rms >= threshold
+    ) {
       startRecorder();
     }
     raf = window.requestAnimationFrame(tick);

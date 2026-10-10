@@ -165,13 +165,27 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-alert-processing") : null);
 
   const voyageKey = blankToNull(source.VOYAGE_API_KEY);
+  const aiProvider = blankToNull(source.AI_PROVIDER);
   const embeddingProvider =
-    blankToNull(source.EMBEDDING_PROVIDER) ?? (voyageKey ? "voyage" : null);
+    blankToNull(source.EMBEDDING_PROVIDER) ??
+    (voyageKey && !blankToNull(source.EMBEDDING_API_KEY) && !blankToNull(source.AI_API_KEY)
+      ? "voyage"
+      : null) ??
+    aiProvider ??
+    (blankToNull(source.EMBEDDING_API_KEY) || blankToNull(source.AI_API_KEY)
+      ? "openai"
+      : null);
   const embeddingApiKey =
-    blankToNull(source.EMBEDDING_API_KEY) ?? voyageKey ?? blankToNull(source.AI_API_KEY);
+    blankToNull(source.EMBEDDING_API_KEY) ??
+    voyageKey ??
+    blankToNull(source.AI_API_KEY);
   const embeddingModel =
     blankToNull(source.EMBEDDING_MODEL) ??
-    (embeddingProvider?.startsWith("voyage") ? "voyage-3-lite" : null);
+    (embeddingProvider?.startsWith("voyage")
+      ? "voyage-3-lite"
+      : embeddingProvider
+        ? "text-embedding-3-small"
+        : null);
 
   return {
     nodeEnv,
@@ -185,7 +199,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     authTokenExpiresIn: blankToNull(source.AUTH_TOKEN_EXPIRES_IN) ?? "8h",
     googleClientId: blankToNull(source.GOOGLE_CLIENT_ID),
     googleClientSecret: blankToNull(source.GOOGLE_CLIENT_SECRET),
-    aiProvider: blankToNull(source.AI_PROVIDER),
+    aiProvider,
     aiApiKey: blankToNull(source.AI_API_KEY),
     aiModel: blankToNull(source.AI_MODEL),
     embeddingProvider,
@@ -194,7 +208,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     embeddingDimensions,
     embeddingBackfillDelayMs,
     atlasVectorIndexName:
-      blankToNull(source.ATLAS_VECTOR_INDEX_NAME) ?? "echofloor_memories_vector_index",
+      blankToNull(source.ATLAS_VECTOR_INDEX_NAME) ?? "echofloor_records_vector_index",
     speechProvider: blankToNull(source.SPEECH_PROVIDER),
     speechApiKey: blankToNull(source.SPEECH_API_KEY),
     audioMaxBytes,

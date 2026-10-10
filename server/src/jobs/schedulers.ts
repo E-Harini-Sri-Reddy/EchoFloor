@@ -5,6 +5,11 @@ import { getDb } from "../db/mongo.js";
 import { emitAlertEvent } from "../services/alertEvents.js";
 import { buildSearchableText } from "../services/buildSearchableText.js";
 import { triggerMemoryEmbedding } from "../services/memoryEmbedding.js";
+import {
+  embedAndUpsertSource,
+  SOURCE_COLLECTIONS,
+  type SearchSourceType,
+} from "../services/searchRecords.js";
 import { newN8nEventId } from "../util/n8nIds.js";
 import type { ObjectId } from "mongodb";
 
@@ -165,20 +170,48 @@ async function sweepConstraintAlerts(config: AppConfig) {
 async function sweepStaleEmbeddings(config: AppConfig) {
   const db = getDb();
   if (!db) return;
+
+  // Sync a batch from every operational collection into unified `records`.
+  for (const { sourceType, collection } of SOURCE_COLLECTIONS) {
+    await syncCollectionToRecords(config, sourceType, collection);
+  }
+
+  // Keep legacy memory pending retry for n8n-only setups.
   const cutoff = new Date(Date.now() - TEN_MINUTES_MS);
   const rows = await db
     .collection("memories")
     .find({
-      embeddingStatus: "pending",
-      updatedAt: { $lte: cutoff },
-      embeddingAttempts: { $lt: 3 },
+      $and: [
+        {
+          $or: [
+            { embedding: { $exists: false } },
+            { embedding: null },
+            { embeddingStatus: { $in: ["pending", "failed"] } },
+            { embeddingStatus: { $exists: false } },
+          ],
+        },
+        {
+          $or: [
+            { embeddingAttempts: { $exists: false } },
+            { embeddingAttempts: { $lt: 3 } },
+          ],
+        },
+        {
+          $or: [
+            { embeddingAttempts: { $exists: false } },
+            { embeddingAttempts: 0 },
+            { updatedAt: { $lte: cutoff } },
+          ],
+        },
+      ],
     })
-    .limit(50)
+    .sort({ updatedAt: 1 })
+    .limit(20)
     .toArray();
 
   for (const memory of rows) {
     const attempts = Number(memory.embeddingAttempts ?? 0) + 1;
-    if (attempts >= 3) {
+    if (attempts > 3) {
       await db.collection("memories").updateOne(
         { _id: memory._id },
         { $set: { embeddingStatus: "failed", embeddingAttempts: attempts, updatedAt: new Date() } },
@@ -188,17 +221,57 @@ async function sweepStaleEmbeddings(config: AppConfig) {
     const text =
       String(memory.text ?? "").trim() ||
       buildSearchableText(memory as Record<string, unknown>);
+    if (!text) continue;
     const contentVersion = Number(memory.contentVersion ?? 1);
+    const organisationId = memory.organisationId;
     await db.collection("memories").updateOne(
       { _id: memory._id },
-      { $set: { embeddingAttempts: attempts, updatedAt: new Date(), text } },
+      {
+        $set: {
+          embeddingStatus: "pending",
+          embeddingAttempts: attempts,
+          updatedAt: new Date(),
+          text,
+          contentVersion,
+        },
+      },
     );
     triggerMemoryEmbedding(
       config,
       toId(memory._id),
-      toId(memory.organisationId),
+      toId(organisationId),
       contentVersion,
       text,
+    );
+  }
+}
+
+async function syncCollectionToRecords(
+  config: AppConfig,
+  sourceType: SearchSourceType,
+  collection: string,
+) {
+  const db = getDb();
+  if (!db) return;
+
+  const readySourceIds = await db.collection("records").distinct("sourceId", {
+    sourceType,
+    embeddingStatus: "ready",
+    embedding: { $exists: true, $ne: null },
+  });
+  const sources = await db
+    .collection(collection)
+    .find({ _id: { $nin: readySourceIds } })
+    .sort({ updatedAt: 1, createdAt: 1 })
+    .limit(12)
+    .toArray();
+
+  for (const source of sources) {
+    await embedAndUpsertSource(
+      db,
+      config,
+      sourceType,
+      source as Record<string, unknown>,
     );
   }
 }

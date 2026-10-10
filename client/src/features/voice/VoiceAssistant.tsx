@@ -39,13 +39,55 @@ import { delay, formatTimestamp } from "@/utils/format";
 
 type LivePhase = "idle" | "listening" | "hearing" | "thinking" | "speaking";
 
+const VOICE_RATE_LIMIT_MS = 30 * 60 * 1000;
+
 const LIVE_CAPTION: Record<LivePhase, string> = {
-  idle: "Tap start to unlock audio and begin.",
-  listening: "Listening… ask about the selected machine.",
-  hearing: "Hearing you…",
+  idle: "Tap to talk when you are ready.",
+  listening: "Ready — tap Stop & send when you finish speaking.",
+  hearing: "Recording… tap Stop & send when done.",
   thinking: "Thinking… searching machine records.",
   speaking: "Speaking the answer.",
 };
+
+function voiceRateLimitKey(userId: string, organisationId: string) {
+  return `echofloor.voice.lastRequest.${organisationId}.${userId}`;
+}
+
+function readVoiceRateLimit(userId: string, organisationId: string): {
+  blocked: boolean;
+  retryAt: number | null;
+  waitMinutes: number;
+} {
+  try {
+    const raw = sessionStorage.getItem(voiceRateLimitKey(userId, organisationId));
+    const last = raw ? Number(raw) : 0;
+    if (!Number.isFinite(last) || last <= 0) {
+      return { blocked: false, retryAt: null, waitMinutes: 0 };
+    }
+    const retryAt = last + VOICE_RATE_LIMIT_MS;
+    if (Date.now() >= retryAt) {
+      return { blocked: false, retryAt: null, waitMinutes: 0 };
+    }
+    return {
+      blocked: true,
+      retryAt,
+      waitMinutes: Math.max(1, Math.ceil((retryAt - Date.now()) / 60_000)),
+    };
+  } catch {
+    return { blocked: false, retryAt: null, waitMinutes: 0 };
+  }
+}
+
+function markVoiceRequestSent(userId: string, organisationId: string) {
+  try {
+    sessionStorage.setItem(
+      voiceRateLimitKey(userId, organisationId),
+      String(Date.now()),
+    );
+  } catch {
+    /* ignore quota */
+  }
+}
 
 function LiveVoiceAssistantPage({
   role,
@@ -55,7 +97,6 @@ function LiveVoiceAssistantPage({
   session: Session;
 }) {
   const db = useDemoDatabase();
-  const toast = useToast();
   const speech = useSpeech();
   const [params] = useSearchParams();
   const machines = machinesFor(db, session.organisationId);
@@ -64,7 +105,8 @@ function LiveVoiceAssistantPage({
     requested || db.selectedMachineId || machines[0]?.id || "",
   );
   const [livePhase, setLivePhase] = useState<LivePhase>("idle");
-  const [conversation, setConversation] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [rateLimitNote, setRateLimitNote] = useState("");
   const [caption, setCaption] = useState("");
   const [failure, setFailure] = useState("");
   const [answer, setAnswer] = useState("");
@@ -78,7 +120,29 @@ function LiveVoiceAssistantPage({
     if (requested) setMachineId(requested);
   }, [requested]);
 
-  // Unmount only — do not depend on `speech` or cleanup will kill the mic mid-conversation.
+  useEffect(() => {
+    const limit = readVoiceRateLimit(session.userId, session.organisationId);
+    if (limit.blocked) {
+      setRateLimitNote(
+        `Voice is limited to one request every 30 minutes. Try again in about ${limit.waitMinutes} minute${limit.waitMinutes === 1 ? "" : "s"}.`,
+      );
+    } else {
+      setRateLimitNote("");
+    }
+    const handle = window.setInterval(() => {
+      const next = readVoiceRateLimit(session.userId, session.organisationId);
+      if (next.blocked) {
+        setRateLimitNote(
+          `Voice is limited to one request every 30 minutes. Try again in about ${next.waitMinutes} minute${next.waitMinutes === 1 ? "" : "s"}.`,
+        );
+      } else {
+        setRateLimitNote("");
+      }
+    }, 15_000);
+    return () => window.clearInterval(handle);
+  }, [session.userId, session.organisationId]);
+
+  // Unmount only — do not depend on `speech` or cleanup will kill the mic mid-turn.
   useEffect(() => {
     return () => {
       speech.cancel();
@@ -87,6 +151,13 @@ function LiveVoiceAssistantPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount/unmount only
   }, []);
+
+  function disposeRecorder() {
+    const previous = recorderRef.current;
+    recorderRef.current = null;
+    previous?.dispose();
+    setRecording(false);
+  }
 
   function machineHasOverheatingAlert(): boolean {
     if (!machine) return false;
@@ -108,13 +179,13 @@ function LiveVoiceAssistantPage({
     setFailure("");
     setLivePhase("speaking");
     await speech.speakAsync(text);
-    setLivePhase("listening");
+    setLivePhase("idle");
     busyRef.current = false;
   }
 
   async function presentVoiceFailure(message: string) {
     setFailure(message);
-    setLivePhase("listening");
+    setLivePhase("idle");
     busyRef.current = false;
   }
 
@@ -160,12 +231,19 @@ function LiveVoiceAssistantPage({
 
   async function handleUtterance(blob: Blob) {
     if (busyRef.current || !machine) return;
+    disposeRecorder();
     busyRef.current = true;
     setLivePhase("thinking");
     setCaption("");
     setFailure("");
 
-    // Worker + MCH-001: resolve open overheating once; other questions go to n8n vector search.
+    // Count this turn against the 30-minute client gate immediately.
+    markVoiceRequestSent(session.userId, session.organisationId);
+    setRateLimitNote(
+      "Voice is limited to one request every 30 minutes. Try again after the cooldown.",
+    );
+
+    // Worker + MCH-001: resolve open overheating once; other questions go to n8n / Mongo.
     if (await handleWorkerOverheatingResolution()) {
       return;
     }
@@ -202,22 +280,30 @@ function LiveVoiceAssistantPage({
     );
   }
 
-  async function startConversation() {
+  async function onTapToTalk() {
     setFailure("");
     if (!machine) {
-      setFailure("Choose a machine before starting.");
+      setFailure("Choose a machine before talking.");
+      return;
+    }
+    const limit = readVoiceRateLimit(session.userId, session.organisationId);
+    if (limit.blocked) {
+      const message = `Voice is limited to one request every 30 minutes. Try again in about ${limit.waitMinutes} minute${limit.waitMinutes === 1 ? "" : "s"}.`;
+      setRateLimitNote(message);
+      setFailure(message);
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
       setFailure("This browser cannot capture audio.");
       return;
     }
+    if (busyRef.current || recording) return;
+
     speech.unlock();
     try {
-      const previous = recorderRef.current;
-      recorderRef.current = null;
-      previous?.dispose();
+      disposeRecorder();
       const handle = await createLiveRecorder({
+        manualOnly: true,
         isPaused: () => busyRef.current,
         onPhase: (vad) => {
           if (!busyRef.current) setLivePhase(vad === "hearing" ? "hearing" : "listening");
@@ -225,37 +311,34 @@ function LiveVoiceAssistantPage({
         onUtterance: (blob) => void handleUtterance(blob),
       });
       recorderRef.current = handle;
-      setConversation(true);
-      setLivePhase("listening");
-      toast.push("Listening. Use Hold to talk, then Stop Listening to send.");
+      handle.beginManualCapture();
+      setRecording(true);
+      setLivePhase("hearing");
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Microphone access was denied or is unavailable.";
       setFailure(message);
-      setConversation(false);
+      disposeRecorder();
       setLivePhase("idle");
     }
   }
 
-  function endConversation() {
-    speech.cancel();
-    const previous = recorderRef.current;
-    recorderRef.current = null;
-    previous?.dispose();
-    setConversation(false);
-    setLivePhase("idle");
-    busyRef.current = false;
-  }
-
-  async function onStopListening() {
+  async function onStopAndSend() {
     if (busyRef.current) return;
     const handle = recorderRef.current;
     if (!handle) {
-      setFailure("Microphone is not active. Tap Start conversation again.");
+      setFailure("Nothing is recording. Tap to talk first.");
       return;
     }
     setLivePhase("hearing");
     await handle.stopListening();
+  }
+
+  function onCancelRecording() {
+    speech.cancel();
+    disposeRecorder();
+    setLivePhase("idle");
+    busyRef.current = false;
   }
 
   return (
@@ -270,8 +353,9 @@ function LiveVoiceAssistantPage({
         <StatusBadge status="info" label={LIVE_CAPTION[livePhase]} />
       </header>
       <p className="notice notice-info">
-        Speak and pause, or tap Hold to talk then Stop Listening to send. Answers use n8n when
-        available, otherwise MongoDB vector search over this machine&apos;s memories and issues.
+        Tap to talk, then Stop &amp; send. The mic is off unless you tap. One voice request is
+        allowed every 30 minutes so n8n is not flooded. Answers use n8n when available, otherwise
+        MongoDB vector search.
       </p>
       <p className="sr-only" aria-live="polite">
         {LIVE_CAPTION[livePhase]}
@@ -282,7 +366,7 @@ function LiveVoiceAssistantPage({
           <select
             id="live-voice-machine"
             value={machineId}
-            disabled={conversation}
+            disabled={recording || livePhase === "thinking" || livePhase === "speaking"}
             onChange={(event) => {
               setMachineId(event.target.value);
               demoStore.selectMachine(event.target.value);
@@ -297,50 +381,50 @@ function LiveVoiceAssistantPage({
           </select>
         </Field>
         <div className="voice-mic-center">
-          {!conversation ? (
-            <Button onClick={() => void startConversation()}>Start conversation</Button>
+          {!recording ? (
+            <Button
+              onClick={() => void onTapToTalk()}
+              disabled={
+                Boolean(rateLimitNote) ||
+                livePhase === "thinking" ||
+                livePhase === "speaking" ||
+                !machineId
+              }
+            >
+              Tap to talk
+            </Button>
           ) : (
             <div className="row" style={{ justifyContent: "center", flexWrap: "wrap" }}>
               <Button
                 variant="primary"
                 disabled={livePhase === "thinking" || livePhase === "speaking"}
-                onClick={() => {
-                  if (busyRef.current) return;
-                  recorderRef.current?.beginManualCapture();
-                  setLivePhase("hearing");
-                }}
+                onClick={() => void onStopAndSend()}
               >
-                Hold to talk
+                Stop &amp; send
               </Button>
-              <Button
-                variant="secondary"
-                disabled={
-                  livePhase === "thinking" ||
-                  livePhase === "speaking" ||
-                  livePhase === "idle"
-                }
-                onClick={() => void onStopListening()}
-              >
-                Stop Listening
-              </Button>
-              <Button variant="tertiary" onClick={endConversation}>
-                End Conversation
+              <Button variant="tertiary" onClick={onCancelRecording}>
+                Cancel
               </Button>
             </div>
           )}
           <div className="voice-mic-status">
             <strong>{LIVE_CAPTION[livePhase]}</strong>
             <p className="muted">
-              {conversation
-                ? livePhase === "thinking"
-                  ? "Waiting for n8n (falls back to workspace records after 30s)…"
-                  : livePhase === "hearing"
-                    ? "Recording — pause briefly or tap Stop Listening to send."
-                    : "Ready. Tap Hold to talk, or just speak."
-                : "Start unlocks speech output and opens the microphone."}
+              {livePhase === "thinking"
+                ? "Processing your question…"
+                : recording
+                  ? "Microphone is on only while you record. Tap Stop & send when finished."
+                  : rateLimitNote
+                    ? rateLimitNote
+                    : "Microphone stays off until you tap to talk."}
             </p>
           </div>
         </div>
+        {rateLimitNote && !recording ? (
+          <div className="notice notice-info" role="status">
+            {rateLimitNote}
+          </div>
+        ) : null}
         {failure ? (
           <div className="notice notice-danger" role="alert">
             {failure}

@@ -12,6 +12,7 @@ import {
 } from "../db/workspace.js";
 import { buildSearchableText } from "../services/buildSearchableText.js";
 import { triggerMemoryEmbedding } from "../services/memoryEmbedding.js";
+import { triggerSourceEmbedding } from "../services/searchRecords.js";
 
 const MAX_ISSUE_PHOTO_BYTES = 1_500_000;
 const ISSUE_KINDS = [
@@ -974,6 +975,7 @@ export function registerWorkspaceRoutes(app: Express, config: AppConfig) {
           updatedAt: now,
         };
         await db.collection("machines").insertOne(doc);
+        triggerSourceEmbedding(config, "machine", doc as Record<string, unknown>);
         const packed = await workspaceForUser(createdBy);
         response.status(201).json({
           success: true,
@@ -1060,6 +1062,12 @@ export function registerWorkspaceRoutes(app: Express, config: AppConfig) {
           updatedAt: now,
         };
         await db.collection("machines").updateOne({ _id: machineId }, { $set: update });
+        triggerSourceEmbedding(config, "machine", {
+          ...existing,
+          ...update,
+          _id: machineId,
+          organisationId,
+        } as Record<string, unknown>);
         const packed = await workspaceForUser(updatedBy);
         response.json({
           success: true,
@@ -1289,6 +1297,7 @@ export function registerWorkspaceRoutes(app: Express, config: AppConfig) {
           1,
           String(memoryDoc.text ?? content),
         );
+        triggerSourceEmbedding(config, "alert", alertDoc as Record<string, unknown>);
 
         const packed = await workspaceForUser(reportedBy);
         response.status(201).json({

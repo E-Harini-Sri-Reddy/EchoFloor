@@ -6,7 +6,13 @@
 - **Admin memory edit route**: Not present on the Express API yet; embedding reset + `buildSearchableText` hooks live in services for when that route is added.
 - **n8n configured when**: `N8N_WEBHOOK_KEY`, `N8N_CALLBACK_SECRET`, and `N8N_VOICE_QUESTION_WEBHOOK_URL` are set (legacy `N8N_WEBHOOK_SECRET` / `N8N_BASE_URL` map forward when new vars are omitted).
 
-## Atlas vector index (for `memories`)
+## Atlas vector index
+
+Default index name: **`echofloor_records_vector_index`** (`ATLAS_VECTOR_INDEX_NAME`).
+
+Create it on the **`records`** collection. The API upserts embedded search docs there for
+**memories, alerts, constraints, tasks, machines, and handovers**. Voice Mongo fallback
+searches `records` first, then `memories`.
 
 ```json
 {
@@ -18,4 +24,4 @@
 }
 ```
 
-If n8n workflow 1 still queries collection `records` with `organisationId` / `machineId` ObjectId filters, update the n8n node to match the above.
+Backfill: `node server/scripts/backfill-embeddings.js`

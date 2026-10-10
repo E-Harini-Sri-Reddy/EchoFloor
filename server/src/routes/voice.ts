@@ -15,6 +15,8 @@ import { validateAudioUpload, VOICE_AUDIO_MAX_BYTES } from "../util/audioUpload.
 import { assertN8nSafeId, newN8nRequestId } from "../util/n8nIds.js";
 
 const N8N_PENDING_FALLBACK_MS = 20_000;
+/** Hard gap between voice questions per user — protects n8n from floods. */
+const VOICE_QUESTION_RATE_LIMIT_MS = 30 * 60 * 1000;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -171,6 +173,30 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           response.status(400).json({
             success: false,
             error: { code: "VALIDATION", message: audio.message },
+          });
+          return;
+        }
+
+        const rateCutoff = new Date(Date.now() - VOICE_QUESTION_RATE_LIMIT_MS);
+        const recent = await db.collection("workflow_requests").findOne(
+          {
+            type: "voice_question",
+            userId,
+            organisationId,
+            createdAt: { $gte: rateCutoff },
+          },
+          { sort: { createdAt: -1 } },
+        );
+        if (recent?.createdAt instanceof Date) {
+          const retryAt = recent.createdAt.getTime() + VOICE_QUESTION_RATE_LIMIT_MS;
+          const waitMinutes = Math.max(1, Math.ceil((retryAt - Date.now()) / 60_000));
+          response.status(429).json({
+            success: false,
+            error: {
+              code: "RATE_LIMITED",
+              message: `Voice is limited to one request every 30 minutes. Try again in about ${waitMinutes} minute${waitMinutes === 1 ? "" : "s"}.`,
+              retryAt: new Date(retryAt).toISOString(),
+            },
           });
           return;
         }

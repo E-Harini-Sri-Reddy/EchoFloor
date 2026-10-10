@@ -28,6 +28,68 @@ function snippet(doc: Record<string, unknown>, max = 280): string {
   return text.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+async function vectorSearchOnCollection(
+  db: Db,
+  collectionName: string,
+  indexName: string,
+  organisationIdString: string,
+  machineIdString: string,
+  queryVector: number[],
+  limit: number,
+): Promise<Record<string, unknown>[]> {
+  const project = {
+    title: 1,
+    content: 1,
+    text: 1,
+    summary: 1,
+    status: 1,
+    type: 1,
+    tags: 1,
+    createdAt: 1,
+    machineId: 1,
+    organisationId: 1,
+    score: { $meta: "vectorSearchScore" as const },
+  };
+  const filters: Record<string, unknown>[] = [
+    { organisationIdString, machineIdString },
+    // Some Atlas indexes were created with the older filter field names.
+    { organisationId: organisationIdString, machineId: machineIdString },
+  ];
+
+  for (const filter of filters) {
+    try {
+      const rows = await db
+        .collection(collectionName)
+        .aggregate([
+          {
+            $vectorSearch: {
+              index: indexName,
+              path: "embedding",
+              queryVector,
+              numCandidates: Math.max(limit * 10, 40),
+              limit,
+              filter,
+            },
+          },
+          { $project: project },
+        ])
+        .toArray();
+      if (rows.length > 0) return rows;
+    } catch (error) {
+      console.warn(
+        `Atlas $vectorSearch failed (${collectionName}/${indexName}): ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+  }
+  return [];
+}
+
+/**
+ * Uses ATLAS_VECTOR_INDEX_NAME (default: echofloor_records_vector_index).
+ * Prefers unified `records` (alerts/tasks/machines/memories/…), then `memories`.
+ */
 async function vectorSearchMemories(
   db: Db,
   config: AppConfig,
@@ -37,48 +99,24 @@ async function vectorSearchMemories(
   limit = 12,
 ): Promise<Record<string, unknown>[]> {
   const indexName = config.atlasVectorIndexName;
-  try {
-    return await db
-      .collection("memories")
-      .aggregate([
-        {
-          $vectorSearch: {
-            index: indexName,
-            path: "embedding",
-            queryVector,
-            numCandidates: Math.max(limit * 10, 40),
-            limit,
-            filter: {
-              organisationIdString,
-              machineIdString,
-            },
-          },
-        },
-        {
-          $project: {
-            title: 1,
-            content: 1,
-            text: 1,
-            summary: 1,
-            status: 1,
-            type: 1,
-            tags: 1,
-            createdAt: 1,
-            machineId: 1,
-            organisationId: 1,
-            score: { $meta: "vectorSearchScore" },
-          },
-        },
-      ])
-      .toArray();
-  } catch (error) {
-    console.warn(
-      `Atlas $vectorSearch failed (${indexName}): ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
+  for (const collectionName of ["records", "memories"] as const) {
+    const rows = await vectorSearchOnCollection(
+      db,
+      collectionName,
+      indexName,
+      organisationIdString,
+      machineIdString,
+      queryVector,
+      limit,
     );
-    return [];
+    if (rows.length > 0) {
+      console.info(
+        `Voice Mongo fallback: vector hit on ${collectionName} via ${indexName} (${rows.length} docs).`,
+      );
+      return rows;
+    }
   }
+  return [];
 }
 
 async function scanMachineMemories(

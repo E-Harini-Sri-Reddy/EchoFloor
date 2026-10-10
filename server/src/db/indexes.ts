@@ -53,4 +53,17 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { key: { embeddingStatus: 1, updatedAt: 1 }, name: "memories_embeddingStatus_updatedAt" },
     { key: { organisationIdString: 1, machineIdString: 1 }, name: "memories_vector_filter_strings" },
   ]);
+
+  await db.collection("records").createIndexes([
+    {
+      key: { sourceType: 1, sourceId: 1, organisationId: 1 },
+      unique: true,
+      name: "records_source_unique",
+    },
+    { key: { embeddingStatus: 1, updatedAt: 1 }, name: "records_embeddingStatus_updatedAt" },
+    {
+      key: { organisationIdString: 1, machineIdString: 1 },
+      name: "records_vector_filter_strings",
+    },
+  ]);
 }
