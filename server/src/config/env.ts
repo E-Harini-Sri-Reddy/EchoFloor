@@ -25,12 +25,23 @@ export interface AppConfig {
   embeddingProvider: string | null;
   embeddingApiKey: string | null;
   embeddingModel: string | null;
-  embeddingDimensions: number | null;
+  embeddingDimensions: number;
+  embeddingBackfillDelayMs: number;
   speechProvider: string | null;
   speechApiKey: string | null;
   audioMaxBytes: number;
+  /** @deprecated Legacy base URL; prefer explicit webhook URLs. */
   n8nBaseUrl: string | null;
+  /** @deprecated Legacy shared secret; maps to callback/webhook key when new vars omitted. */
   n8nWebhookSecret: string | null;
+  n8nWebhookKey: string | null;
+  n8nCallbackSecret: string | null;
+  n8nRequestTimeoutMs: number;
+  n8nVoiceQuestionWebhookUrl: string | null;
+  n8nWorkerReportWebhookUrl: string | null;
+  n8nShiftHandoverWebhookUrl: string | null;
+  n8nMemoryEmbeddingWebhookUrl: string | null;
+  n8nAlertWebhookUrl: string | null;
   logLevel: string;
 }
 
@@ -69,6 +80,11 @@ function requireNodeEnv(value: string | undefined): NodeEnv {
   );
 }
 
+function joinWebhook(base: string, path: string): string {
+  const trimmed = base.replace(/\/+$/, "");
+  return `${trimmed}/${path.replace(/^\/+/, "")}`;
+}
+
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = requireNodeEnv(source.NODE_ENV);
   const missing: string[] = [];
@@ -87,7 +103,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     );
   }
 
-  // Render injects PORT. Local production builds may omit it.
   const portValue = source.PORT?.trim() || "5000";
   const port = Number(portValue);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -100,21 +115,52 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new ConfigError("AUDIO_MAX_BYTES must be a positive integer.");
   }
 
-  const dimensionsRaw = blankToNull(source.EMBEDDING_DIMENSIONS);
-  let embeddingDimensions: number | null = null;
-  if (dimensionsRaw) {
-    embeddingDimensions = Number(dimensionsRaw);
-    if (!Number.isInteger(embeddingDimensions) || embeddingDimensions < 1) {
-      throw new ConfigError("EMBEDDING_DIMENSIONS must be a positive integer when set.");
-    }
+  const dimensionsRaw = blankToNull(source.EMBEDDING_DIMENSIONS) ?? "1024";
+  const embeddingDimensions = Number(dimensionsRaw);
+  if (!Number.isInteger(embeddingDimensions) || embeddingDimensions < 1) {
+    throw new ConfigError("EMBEDDING_DIMENSIONS must be a positive integer.");
   }
 
-  // Render sets RENDER_EXTERNAL_URL (e.g. https://echofloor.onrender.com).
+  const backfillRaw = blankToNull(source.EMBEDDING_BACKFILL_DELAY_MS) ?? "2500";
+  const embeddingBackfillDelayMs = Number(backfillRaw);
+  if (!Number.isInteger(embeddingBackfillDelayMs) || embeddingBackfillDelayMs < 0) {
+    throw new ConfigError("EMBEDDING_BACKFILL_DELAY_MS must be a non-negative integer.");
+  }
+
+  const timeoutRaw = blankToNull(source.N8N_REQUEST_TIMEOUT_MS) ?? "90000";
+  const n8nRequestTimeoutMs = Number(timeoutRaw);
+  if (!Number.isInteger(n8nRequestTimeoutMs) || n8nRequestTimeoutMs < 1000) {
+    throw new ConfigError("N8N_REQUEST_TIMEOUT_MS must be an integer of at least 1000.");
+  }
+
   const renderUrl = blankToNull(source.RENDER_EXTERNAL_URL);
   const clientUrl =
     blankToNull(source.CLIENT_URL) ?? renderUrl ?? "http://localhost:5173";
   const serverUrl =
     blankToNull(source.SERVER_URL) ?? renderUrl ?? `http://localhost:${port}`;
+
+  const legacyBase = blankToNull(source.N8N_BASE_URL);
+  const legacySecret = blankToNull(source.N8N_WEBHOOK_SECRET);
+
+  const n8nWebhookKey = blankToNull(source.N8N_WEBHOOK_KEY) ?? legacySecret;
+  const n8nCallbackSecret =
+    blankToNull(source.N8N_CALLBACK_SECRET) ?? legacySecret;
+
+  const n8nVoiceQuestionWebhookUrl =
+    blankToNull(source.N8N_VOICE_QUESTION_WEBHOOK_URL) ??
+    (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-voice-question") : null);
+  const n8nWorkerReportWebhookUrl =
+    blankToNull(source.N8N_WORKER_REPORT_WEBHOOK_URL) ??
+    (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-worker-report") : null);
+  const n8nShiftHandoverWebhookUrl =
+    blankToNull(source.N8N_SHIFT_HANDOVER_WEBHOOK_URL) ??
+    (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-shift-handover") : null);
+  const n8nMemoryEmbeddingWebhookUrl =
+    blankToNull(source.N8N_MEMORY_EMBEDDING_WEBHOOK_URL) ??
+    (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-memory-embedding") : null);
+  const n8nAlertWebhookUrl =
+    blankToNull(source.N8N_ALERT_WEBHOOK_URL) ??
+    (legacyBase ? joinWebhook(legacyBase, "webhook/echofloor-alert-processing") : null);
 
   return {
     nodeEnv,
@@ -135,11 +181,20 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     embeddingApiKey: blankToNull(source.EMBEDDING_API_KEY),
     embeddingModel: blankToNull(source.EMBEDDING_MODEL),
     embeddingDimensions,
+    embeddingBackfillDelayMs,
     speechProvider: blankToNull(source.SPEECH_PROVIDER),
     speechApiKey: blankToNull(source.SPEECH_API_KEY),
     audioMaxBytes,
-    n8nBaseUrl: blankToNull(source.N8N_BASE_URL),
-    n8nWebhookSecret: blankToNull(source.N8N_WEBHOOK_SECRET),
+    n8nBaseUrl: legacyBase,
+    n8nWebhookSecret: legacySecret,
+    n8nWebhookKey,
+    n8nCallbackSecret,
+    n8nRequestTimeoutMs,
+    n8nVoiceQuestionWebhookUrl,
+    n8nWorkerReportWebhookUrl,
+    n8nShiftHandoverWebhookUrl,
+    n8nMemoryEmbeddingWebhookUrl,
+    n8nAlertWebhookUrl,
     logLevel: blankToNull(source.LOG_LEVEL) ?? "info",
   };
 }
@@ -148,6 +203,12 @@ function flag(configured: boolean): IntegrationStatus {
   return configured
     ? { configured: true, status: "configured" }
     : { configured: false, status: "unavailable" };
+}
+
+export function isN8nIntegrationConfigured(config: AppConfig): boolean {
+  return Boolean(
+    config.n8nWebhookKey && config.n8nCallbackSecret && config.n8nVoiceQuestionWebhookUrl,
+  );
 }
 
 export function integrationReport(config: AppConfig): IntegrationReport {
@@ -160,7 +221,7 @@ export function integrationReport(config: AppConfig): IntegrationReport {
       Boolean(config.embeddingModel && embeddingKey && config.embeddingDimensions),
     ),
     speech: flag(Boolean(config.speechProvider && config.speechApiKey)),
-    n8n: flag(Boolean(config.n8nBaseUrl && config.n8nWebhookSecret)),
+    n8n: flag(isN8nIntegrationConfigured(config)),
   };
 }
 
@@ -170,9 +231,10 @@ export function missingOptionalNames(config: AppConfig): string[] {
   if (!report.mongodb.configured) names.push("MONGODB_URI");
   if (!config.authSecret) names.push("AUTH_SECRET");
   if (!report.googleOAuth.configured) names.push("GOOGLE_CLIENT_ID");
-  if (!report.ai.configured) names.push("AI_PROVIDER/AI_API_KEY/AI_MODEL");
   if (!report.embeddings.configured) names.push("EMBEDDING_MODEL");
   if (!report.speech.configured) names.push("SPEECH_PROVIDER/SPEECH_API_KEY");
-  if (!report.n8n.configured) names.push("N8N_BASE_URL/N8N_WEBHOOK_SECRET");
+  if (!report.n8n.configured) {
+    names.push("N8N_WEBHOOK_KEY/N8N_CALLBACK_SECRET/N8N_VOICE_QUESTION_WEBHOOK_URL");
+  }
   return names;
 }

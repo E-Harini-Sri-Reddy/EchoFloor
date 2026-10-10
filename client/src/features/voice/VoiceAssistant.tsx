@@ -14,10 +14,236 @@ import { labelMemoryStatus } from "@/domain/labels";
 import { machineById, machinesFor, memoriesForMachine } from "@/domain/queries";
 import { buildMachineUsageInsight } from "@/domain/workSummary";
 import { useDemoDatabase } from "@/hooks/useDemo";
+import { useSpeech } from "@/hooks/useSpeech";
 import { fetchHealth } from "@/services/clientConfig";
 import { demoStore } from "@/services/demoStore";
-import type { MemoryStatus, MemoryType } from "@/types/domain";
+import {
+  pollVoiceQuestion,
+  postVoiceQuestion,
+  type VoiceEvidenceItem,
+} from "@/services/n8nApi";
+import {
+  blobFilename,
+  createLiveRecorder,
+  type LiveRecorderHandle,
+} from "@/features/voice/liveVoiceRecording";
+import type { MemoryStatus, MemoryType, Session } from "@/types/domain";
 import { delay, formatTimestamp } from "@/utils/format";
+
+type LivePhase = "idle" | "listening" | "hearing" | "thinking" | "speaking";
+
+const LIVE_CAPTION: Record<LivePhase, string> = {
+  idle: "Tap start to unlock audio and begin.",
+  listening: "Listening… ask about the selected machine.",
+  hearing: "Hearing you…",
+  thinking: "Thinking… waiting for n8n.",
+  speaking: "Speaking the answer.",
+};
+
+function LiveVoiceAssistantPage({
+  role,
+  session,
+}: {
+  role: "admin" | "worker";
+  session: Session;
+}) {
+  const db = useDemoDatabase();
+  const toast = useToast();
+  const speech = useSpeech();
+  const [params] = useSearchParams();
+  const machines = machinesFor(db, session.organisationId);
+  const requested = params.get("machine");
+  const [machineId, setMachineId] = useState(
+    requested || db.selectedMachineId || machines[0]?.id || "",
+  );
+  const [livePhase, setLivePhase] = useState<LivePhase>("idle");
+  const [conversation, setConversation] = useState(false);
+  const [caption, setCaption] = useState("");
+  const [failure, setFailure] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [evidence, setEvidence] = useState<VoiceEvidenceItem[]>([]);
+  const recorderRef = useRef<LiveRecorderHandle | null>(null);
+  const busyRef = useRef(false);
+  const base = role === "admin" ? "/admin" : "/worker";
+  const machine = machineById(db, session.organisationId, machineId);
+
+  useEffect(() => {
+    if (requested) setMachineId(requested);
+  }, [requested]);
+
+  useEffect(() => {
+    return () => {
+      speech.cancel();
+      recorderRef.current?.dispose();
+    };
+  }, [speech]);
+
+  async function handleUtterance(blob: Blob) {
+    if (busyRef.current || !machine) return;
+    busyRef.current = true;
+    setLivePhase("thinking");
+    setCaption("");
+    setFailure("");
+    const posted = await postVoiceQuestion(
+      { userId: session.userId, organisationId: session.organisationId },
+      { machineId: machine.id, audioBlob: blob, filename: blobFilename(blob) },
+    );
+    if (!posted.ok) {
+      setFailure(posted.message);
+      setLivePhase("listening");
+      busyRef.current = false;
+      return;
+    }
+    const result = posted.pending
+      ? await pollVoiceQuestion(
+          { userId: session.userId, organisationId: session.organisationId },
+          posted.requestId,
+        )
+      : { ok: true as const, data: posted.data };
+    if (!result.ok) {
+      setFailure(result.message);
+      setLivePhase("listening");
+      busyRef.current = false;
+      return;
+    }
+    setAnswer(result.data.answer);
+    setEvidence(result.data.evidence);
+    setCaption(result.data.answer);
+    setLivePhase("speaking");
+    await speech.speakAsync(result.data.answer);
+    setLivePhase("listening");
+    busyRef.current = false;
+  }
+
+  async function startConversation() {
+    setFailure("");
+    if (!machine) {
+      setFailure("Choose a machine before starting.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setFailure("This browser cannot capture audio.");
+      return;
+    }
+    speech.unlock();
+    try {
+      recorderRef.current?.dispose();
+      const handle = await createLiveRecorder({
+        onPhase: (vad) => {
+          if (!busyRef.current) setLivePhase(vad === "hearing" ? "hearing" : "listening");
+        },
+        onUtterance: (blob) => void handleUtterance(blob),
+      });
+      recorderRef.current = handle;
+      setConversation(true);
+      setLivePhase("listening");
+      toast.push("Live voice assistant is listening. Speak your question.");
+    } catch {
+      setFailure("Microphone access was denied or is unavailable.");
+    }
+  }
+
+  function endConversation() {
+    speech.cancel();
+    recorderRef.current?.dispose();
+    recorderRef.current = null;
+    setConversation(false);
+    setLivePhase("idle");
+    busyRef.current = false;
+  }
+
+  return (
+    <div className="page voice-layout voice-compact">
+      <header className="page-header voice-compact-header">
+        <div>
+          <h2>Voice Assistant</h2>
+          <p className="lede">
+            Live mode — questions are sent to n8n and answers may cite memory records.
+          </p>
+        </div>
+        <StatusBadge status="info" label={LIVE_CAPTION[livePhase]} />
+      </header>
+      <p className="notice notice-info">
+        Connected to MongoDB. Audio uploads go through the EchoFloor API; n8n webhooks stay
+        server-side.
+      </p>
+      <p className="sr-only" aria-live="polite">
+        {LIVE_CAPTION[livePhase]}
+        {caption ? `. ${caption}` : ""}
+      </p>
+      <section className="card stack voice-panel">
+        <Field label="Machine" htmlFor="live-voice-machine">
+          <select
+            id="live-voice-machine"
+            value={machineId}
+            disabled={conversation}
+            onChange={(event) => {
+              setMachineId(event.target.value);
+              demoStore.selectMachine(event.target.value);
+            }}
+          >
+            <option value="">Select a machine</option>
+            {machines.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.machineCode} — {item.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="voice-mic-center">
+          {!conversation ? (
+            <Button onClick={() => void startConversation()}>Start conversation</Button>
+          ) : (
+            <Button variant="secondary" onClick={endConversation}>
+              End conversation
+            </Button>
+          )}
+          <div className="voice-mic-status">
+            <strong>{LIVE_CAPTION[livePhase]}</strong>
+            <p className="muted">
+              {conversation
+                ? "Pause briefly after you finish speaking so EchoFloor can send the clip."
+                : "Start unlocks speech output and opens the microphone."}
+            </p>
+          </div>
+        </div>
+        {failure ? (
+          <div className="notice notice-danger" role="alert">
+            {failure}
+          </div>
+        ) : null}
+      </section>
+      {answer ? (
+        <section className="card stack">
+          <h3>Latest answer</h3>
+          <p>{answer}</p>
+          {evidence.length === 0 ? (
+            <p className="muted">No supporting records were returned.</p>
+          ) : (
+            evidence.map((item) => (
+              <article key={item.recordId} className="list-card">
+                <p>{item.text}</p>
+                <span className="muted">
+                  Record {item.recordId.slice(-6)} ·{" "}
+                  {formatTimestamp(item.createdAt, "UTC")}
+                </span>
+                {role === "admin" ? (
+                  <Link to={`/admin/memories/${item.recordId}`}>Open record</Link>
+                ) : null}
+              </article>
+            ))
+          )}
+          <div className="row">
+            <Button variant="tertiary" onClick={() => speech.speak(answer)}>
+              Read again
+            </Button>
+            <Link to={`${base}/machines/${machineId}`}>Machine details</Link>
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
 
 type Phase =
   | "idle"
@@ -93,6 +319,9 @@ export function VoiceAssistantPage({ role }: { role: "admin" | "worker" }) {
   }, []);
 
   if (!session) return null;
+  if (session.live) {
+    return <LiveVoiceAssistantPage role={role} session={session} />;
+  }
   const organisationId = session.organisationId;
   const machine = machineById(db, organisationId, machineId);
   const temporary = role === "worker" && isTemporaryWorker(session);

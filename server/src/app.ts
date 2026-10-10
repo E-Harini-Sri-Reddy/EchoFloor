@@ -2,7 +2,14 @@ import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
 import { GoogleAuthError, verifyGoogleIdToken } from "./auth/google.js";
 import { integrationReport, type AppConfig } from "./config/env.js";
+import { ensureIndexes } from "./db/indexes.js";
 import { connectMongo, getDb } from "./db/mongo.js";
+import { startSchedulers } from "./jobs/schedulers.js";
+import { registerHandoverWorkflowRoutes } from "./routes/handoverWorkflow.js";
+import { registerN8nAlertRoutes } from "./routes/n8nAlerts.js";
+import { registerReportsVoiceRoutes } from "./routes/reportsVoice.js";
+import { registerVoiceRoutes } from "./routes/voice.js";
+import { registerWorkflowRoutes } from "./routes/workflows.js";
 import { registerWorkspaceRoutes } from "./routes/workspace.js";
 import { registerSpaFallback } from "./static.js";
 
@@ -18,10 +25,21 @@ function corsOrigins(config: AppConfig): string[] | boolean {
 }
 
 export async function createApp(config: AppConfig) {
-  await connectMongo(config).catch((error: unknown) => {
+  const db = await connectMongo(config).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "MongoDB connection failed.";
     console.error(`EchoFloor MongoDB connection error: ${message}`);
+    return null;
   });
+  if (db) {
+    await ensureIndexes(db).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Index setup failed.";
+      console.error(`EchoFloor MongoDB index error: ${message}`);
+    });
+    // Cron keeps the Node process alive; skip in automated tests.
+    if (config.nodeEnv !== "test") {
+      startSchedulers(config);
+    }
+  }
 
   const app = express();
   app.disable("x-powered-by");
@@ -96,6 +114,11 @@ export async function createApp(config: AppConfig) {
   });
 
   registerWorkspaceRoutes(app, config);
+  registerWorkflowRoutes(app, config);
+  registerVoiceRoutes(app, config);
+  registerReportsVoiceRoutes(app, config);
+  registerHandoverWorkflowRoutes(app, config);
+  registerN8nAlertRoutes(app, config);
 
   const spaMounted =
     config.nodeEnv === "production"

@@ -13,6 +13,7 @@ import {
 } from "@/domain/notifications";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { demoStore } from "@/services/demoStore";
+import { AlertBell } from "@/components/alerts/AlertBell";
 import { ErrorState, LoadingState } from "@/components/ui/States";
 
 interface NavItem {
@@ -251,6 +252,7 @@ function Shell({
                 More
               </button>
             ) : null}
+            <AlertBell />
             <div className="notify">
               <button
                 type="button"

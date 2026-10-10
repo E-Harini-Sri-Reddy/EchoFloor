@@ -25,8 +25,11 @@ import {
   shiftsForOrganisation,
   timingChangeAllowed,
 } from "@/domain/shifts";
+import { SimpleMarkdown } from "@/components/markdown/SimpleMarkdown";
 import { useDemoDatabase } from "@/hooks/useDemo";
+import { useSpeech } from "@/hooks/useSpeech";
 import { demoStore } from "@/services/demoStore";
+import { pollHandoverRequest, postShiftHandover } from "@/services/n8nApi";
 import type { ShiftKind, ShiftRotation, ShiftTemplate } from "@/types/domain";
 import {
   delay,
@@ -391,19 +394,69 @@ function HandoverSummaryPanel() {
   const db = useDemoDatabase();
   const session = db.session;
   const toast = useToast();
+  const speech = useSpeech();
   const [pending, setPending] = useState<"generate" | "publish" | null>(null);
   const [error, setError] = useState("");
+  const [liveMarkdown, setLiveMarkdown] = useState<string | null>(null);
+  const [liveMemoryIds, setLiveMemoryIds] = useState<string[]>([]);
   if (!session) return null;
-  const handovers = handoversFor(db, session.organisationId);
+  const activeSession = session;
+  const handovers = handoversFor(db, activeSession.organisationId);
   const current = handovers[0];
+  const shifts = shiftsForOrganisation(db, activeSession.organisationId);
   const timezone =
-    db.organisations.find((item) => item.id === session.organisationId)?.settings
+    db.organisations.find((item) => item.id === activeSession.organisationId)?.settings
       .timezone ?? "UTC";
   const now = new Date();
 
   async function generate() {
     setPending("generate");
     setError("");
+    setLiveMarkdown(null);
+    setLiveMemoryIds([]);
+    if (activeSession.live) {
+      const shiftId = shifts[0]?.id;
+      if (!shiftId) {
+        setPending(null);
+        setError("Schedule at least one shift before generating a handover.");
+        return;
+      }
+      const started = await postShiftHandover(
+        { userId: activeSession.userId, organisationId: activeSession.organisationId },
+        shiftId,
+      );
+      if (!started.ok) {
+        setPending(null);
+        setError(started.message);
+        return;
+      }
+      const polled = await pollHandoverRequest(
+        { userId: activeSession.userId, organisationId: activeSession.organisationId },
+        started.requestId,
+      );
+      setPending(null);
+      if (!polled.ok) {
+        setError(polled.message);
+        return;
+      }
+      if (polled.data.status === "failed") {
+        setError(polled.data.errorMessage ?? "Handover workflow failed.");
+        return;
+      }
+      const markdown =
+        polled.data.handover?.summaryMarkdown ??
+        String(
+          (polled.data.result as { summaryMarkdown?: string } | null)?.summaryMarkdown ?? "",
+        );
+      if (!markdown.trim()) {
+        setError("Handover completed but no summary text was returned.");
+        return;
+      }
+      setLiveMarkdown(markdown);
+      setLiveMemoryIds(polled.data.handover?.memoryIds ?? []);
+      toast.push("Handover summary returned from n8n.");
+      return;
+    }
     await delay(500);
     const result = demoStore.generateHandover();
     setPending(null);
@@ -439,12 +492,38 @@ function HandoverSummaryPanel() {
           {error}
         </div>
       ) : null}
-      {!current ? (
+      {activeSession.live && liveMarkdown ? (
+        <article className="card stack">
+          <div className="spread">
+            <h3>Generated handover (live)</h3>
+            <Button variant="tertiary" onClick={() => void speech.speakAsync(liveMarkdown)}>
+              Read aloud
+            </Button>
+          </div>
+          <p className="notice notice-info">
+            Rendered from markdown returned by n8n. HTML tags are stripped before display.
+          </p>
+          <SimpleMarkdown source={liveMarkdown} />
+          {liveMemoryIds.length ? (
+            <>
+              <h3>Cited memory ids</h3>
+              <ul>
+                {liveMemoryIds.map((memoryId) => (
+                  <li key={memoryId}>
+                    <Link to={`/admin/memories/${memoryId}`}>{memoryId}</Link>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </article>
+      ) : null}
+      {!current && !(activeSession.live && liveMarkdown) ? (
         <EmptyState
           title="No handover available"
           message="Generate a draft after operational records exist. An empty organisation will not invent shift activity."
         />
-      ) : (
+      ) : current && (!activeSession.live || !liveMarkdown) ? (
         <article className="card stack">
           <div className="spread">
             <h3>{current.title}</h3>
@@ -507,7 +586,7 @@ function HandoverSummaryPanel() {
             );
           })}
         </article>
-      )}
+      ) : null}
     </div>
   );
 }

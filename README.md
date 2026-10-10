@@ -51,6 +51,37 @@ npm run build:render        # client + server
 npm start                   # serves API and client/dist on PORT
 ```
 
-## Not connected yet
+## Live API and n8n workflows
 
-AI provider, embeddings, speech-to-text, and n8n remain optional integrations. With `VITE_DATA_SOURCE=api` and a connected MongoDB URI, organisation data (machines, memberships, etc.) is loaded from Atlas after sign-in.
+With `VITE_DATA_SOURCE=api`, a valid `MONGODB_URI`, and n8n webhook URLs in `.env`, signed-in sessions load workspace data from MongoDB (`session.live === true`). The browser talks only to the EchoFloor API; n8n webhooks and keys stay on the server.
+
+### Frontend routes (via `VITE_API_BASE_URL`, default `/api/v1`)
+
+| Flow | Method | Path | Notes |
+|------|--------|------|--------|
+| Voice question | `POST` | `/voice/questions` | Multipart: `audioFile`, `machineId`; session via `X-EchoFloor-User-Id` + `X-EchoFloor-Organisation-Id` (or query/body `userId` / `organisationId`) |
+| Voice question status | `GET` | `/voice/questions/:requestId` | `202` while pending |
+| Worker voice report | `POST` | `/reports/voice` | Same multipart shape as voice questions |
+| Report status | `GET` | `/reports/voice/:requestId` | Poll until `completed` or `failed` |
+| Shift handover | `POST` | `/shifts/:shiftId/handover` | Returns `202` + `requestId` |
+| Handover status | `GET` | `/handovers/:requestId` | **Not** `/handovers/requests/:requestId` |
+| n8n alerts | `GET` | `/alerts` | Workflow alerts with `eventId` |
+| Mark alert read | `PATCH` | `/alerts/:id/read` | |
+
+Client helpers live in `client/src/services/n8nApi.ts`. Speech output uses `client/src/hooks/useSpeech.ts`.
+
+### n8n environment variables (server only)
+
+Configure in `.env` (see `.env.example`): `N8N_WEBHOOK_KEY`, `N8N_CALLBACK_SECRET`, `N8N_VOICE_QUESTION_WEBHOOK_URL`, `N8N_WORKER_REPORT_WEBHOOK_URL`, `N8N_SHIFT_HANDOVER_WEBHOOK_URL`, `N8N_MEMORY_EMBEDDING_WEBHOOK_URL`, `N8N_ALERT_WEBHOOK_URL`. Do **not** copy webhook URLs or keys into `VITE_` variables.
+
+### Troubleshooting
+
+- **503 Voice/handover/report unavailable** — MongoDB disconnected or the matching `N8N_*_WEBHOOK_URL` is empty. Check `/api/v1/health`.
+- **401 on workflow routes** — Pass active membership `userId` and `organisationId` (headers or query).
+- **Voice question 404 machine** — `machineId` must exist in the signed-in organisation.
+- **Empty evidence cards** — Voice answers cite documents in the MongoDB **`memories`** collection. If n8n or callbacks write to a different collection (e.g. `records`), evidence hydration will be empty until IDs match `memories._id`.
+- **“Updating search index…”** — `embeddingStatus: pending` on a memory row; the embedding callback (`/api/v1/workflows/callbacks/embeddings`) has not marked it `ready` yet.
+
+## Optional integrations
+
+AI provider, embeddings, and speech-to-text keys remain optional. Mock mode (`VITE_DATA_SOURCE=mock`) keeps browser-session fixtures with no n8n calls.

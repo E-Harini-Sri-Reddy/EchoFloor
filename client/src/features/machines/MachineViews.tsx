@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
@@ -22,8 +22,151 @@ import {
   userById,
 } from "@/domain/queries";
 import { MachineForm } from "@/features/machines/MachineForm";
+import { blobFilename } from "@/features/voice/liveVoiceRecording";
 import { useDemoDatabase } from "@/hooks/useDemo";
+import { pollVoiceReport, postVoiceReport } from "@/services/n8nApi";
+import { useToast } from "@/components/ui/Toast";
 import { formatTimestamp } from "@/utils/format";
+
+const REPORT_MAX_SECONDS = 120;
+
+function MachineVoiceReport({
+  machineId,
+  userId,
+  organisationId,
+}: {
+  machineId: string;
+  userId: string;
+  organisationId: string;
+}) {
+  const toast = useToast();
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState("");
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearInterval(timerRef.current);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  async function start() {
+    setMessage("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMessage("This browser cannot capture audio.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorderRef.current = recorder;
+      recorder.start(500);
+      setRecording(true);
+      setSeconds(0);
+      timerRef.current = window.setInterval(() => {
+        setSeconds((value) => {
+          if (value + 1 >= REPORT_MAX_SECONDS) {
+            void stop();
+            return REPORT_MAX_SECONDS;
+          }
+          return value + 1;
+        });
+      }, 1000);
+    } catch {
+      setMessage("Microphone access was denied or is unavailable.");
+    }
+  }
+
+  async function stop() {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      setRecording(false);
+      return;
+    }
+    setPending(true);
+    await new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+      recorder.stop();
+    });
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setRecording(false);
+    const blob = chunksRef.current.length
+      ? new Blob(chunksRef.current, { type: recorder.mimeType })
+      : null;
+    if (!blob || blob.size === 0) {
+      setPending(false);
+      setMessage("No audio was captured.");
+      return;
+    }
+    const posted = await postVoiceReport(
+      { userId, organisationId },
+      { machineId, audioBlob: blob, filename: blobFilename(blob) },
+    );
+    if (!posted.ok) {
+      setPending(false);
+      setMessage(posted.message);
+      return;
+    }
+    const polled = await pollVoiceReport({ userId, organisationId }, posted.requestId);
+    setPending(false);
+    if (!polled.ok) {
+      setMessage(polled.message);
+      return;
+    }
+    if (polled.data.status === "failed") {
+      setMessage(polled.data.errorMessage ?? "Voice report workflow failed.");
+      return;
+    }
+    toast.push("Voice report accepted by n8n. Refresh workspace to see new memories.");
+    setMessage("Report submitted. n8n will create or update operational records.");
+  }
+
+  return (
+    <section className="card stack">
+      <h3>Report by voice (live)</h3>
+      <p className="muted">
+        Record up to {REPORT_MAX_SECONDS / 60} minutes. Audio is uploaded to{" "}
+        <span className="mono">POST /reports/voice</span>, not directly to n8n.
+      </p>
+      <div className="row">
+        {!recording ? (
+          <Button onClick={() => void start()} disabled={pending}>
+            Record report
+          </Button>
+        ) : (
+          <Button variant="secondary" onClick={() => void stop()} data-recording="true">
+            Stop · {seconds}s
+          </Button>
+        )}
+      </div>
+      {pending ? <p className="muted">Uploading and waiting for n8n…</p> : null}
+      {message ? (
+        <p className="notice" role="status">
+          {message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 
 export function MachineListPage({ role }: { role: "admin" | "worker" }) {
   const db = useDemoDatabase();
@@ -252,6 +395,13 @@ export function MachineDetailPage({ role }: { role: "admin" | "worker" }) {
         </article>
       </div>
       {machine.description ? <p>{machine.description}</p> : null}
+      {session.live ? (
+        <MachineVoiceReport
+          machineId={machine.id}
+          userId={session.userId}
+          organisationId={session.organisationId}
+        />
+      ) : null}
       <section className="stack">
         <h3>Constraints</h3>
         {constraints.length === 0 ? (

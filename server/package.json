@@ -9,22 +9,27 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "tsx --test src/config/env.test.ts src/auth/google.test.ts src/app.test.ts"
+    "test": "tsx --test src/config/env.test.ts src/auth/google.test.ts src/app.test.ts src/workflows/n8n.integration.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "google-auth-library": "^11.2.0",
-    "mongodb": "^7.7.0"
+    "mongodb": "^7.7.0",
+    "multer": "^2.4.0",
+    "node-cron": "^4.6.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
+    "@types/multer": "^2.3.0",
     "@types/node": "^24.5.2",
+    "@types/node-cron": "^3.0.11",
     "eslint": "^9.36.0",
     "globals": "^16.4.0",
+    "mongodb-memory-server": "^11.3.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.44.0"

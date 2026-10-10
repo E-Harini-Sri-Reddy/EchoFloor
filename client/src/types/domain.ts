@@ -242,6 +242,9 @@ export interface MemoryRecord {
     resolvedAt: string;
   };
   currentRevision: number;
+  /** Vector index lifecycle from n8n embedding workflow (live data only). */
+  embeddingStatus?: "pending" | "ready" | "failed";
+  contentVersion?: number;
   /** Example records are historical demonstration knowledge, not live telemetry. */
   example: boolean;
   createdBy: string;

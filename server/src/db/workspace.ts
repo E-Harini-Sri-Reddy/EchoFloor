@@ -104,7 +104,10 @@ export async function loadWorkspace(
     db.collection("users").find({}).toArray(),
     db.collection("invitations").find(orgFilter).toArray(),
     db.collection("machines").find(orgFilter).toArray(),
-    db.collection("memories").find(orgFilter).toArray(),
+    db
+      .collection("memories")
+      .find(orgFilter, { projection: { embedding: 0 } })
+      .toArray(),
     db.collection("memory_revisions").find(orgFilter).toArray(),
     db.collection("constraints").find(orgFilter).toArray(),
     db.collection("shifts").find(orgFilter).toArray(),

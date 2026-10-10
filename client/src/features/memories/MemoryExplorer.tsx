@@ -154,10 +154,15 @@ export function MemoryExplorerPage() {
               >
                 <div className="spread">
                   <strong>{memory.title}</strong>
-                  <StatusBadge
-                    status={memory.status}
-                    label={labelMemoryStatus(memory.status)}
-                  />
+                  <div className="row">
+                    {memory.embeddingStatus === "pending" ? (
+                      <StatusBadge status="info" label="Updating search index…" />
+                    ) : null}
+                    <StatusBadge
+                      status={memory.status}
+                      label={labelMemoryStatus(memory.status)}
+                    />
+                  </div>
                 </div>
                 <span className="mono">{machine?.machineCode ?? "Unknown machine"}</span>
                 <span className="muted">
@@ -284,6 +289,9 @@ export function MemoryDetailPage() {
         </div>
         <div className="row">
           <StatusBadge status={memory.status} label={labelMemoryStatus(memory.status)} />
+          {memory.embeddingStatus === "pending" ? (
+            <StatusBadge status="info" label="Updating search index…" />
+          ) : null}
           {memory.status !== "verified" ? (
             <StatusBadge status="pending_review" label="Not verified" />
           ) : null}
