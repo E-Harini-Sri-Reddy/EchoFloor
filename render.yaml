@@ -1,0 +1,45 @@
+# EchoFloor on Render — single web service (API + built React client).
+# Dashboard: New → Blueprint → connect this repo → apply.
+# Free web services sleep after idle traffic; the first request may take ~30s.
+
+services:
+  - type: web
+    name: echofloor
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: npm install && npm run build:render
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20.19.0"
+      - key: API_PREFIX
+        value: /api/v1
+      - key: MONGODB_DATABASE
+        value: echofloor
+      - key: MONGODB_URI
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: AUTH_TOKEN_EXPIRES_IN
+        value: 8h
+      - key: DEMO_SEED_PASSWORD
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: VITE_APP_NAME
+        value: EchoFloor
+      - key: VITE_DATA_SOURCE
+        value: api
+      - key: VITE_API_BASE_URL
+        value: /api/v1
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+      - key: LOG_LEVEL
+        value: info

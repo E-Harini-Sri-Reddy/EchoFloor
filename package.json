@@ -12,6 +12,8 @@
     "dev:client": "npm run dev -w client",
     "dev:server": "npm run dev -w server",
     "build": "npm run build --workspaces --if-present",
+    "build:render": "npm run build -w client && npm run build -w server",
+    "start": "npm run start -w server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

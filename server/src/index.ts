@@ -27,9 +27,9 @@ async function start() {
   }
 
   const app = await createApp(config);
-  app.listen(config.port, () => {
+  app.listen(config.port, "0.0.0.0", () => {
     console.info(
-      `EchoFloor API listening on port ${config.port}. Health: ${config.apiPrefix}/health`,
+      `EchoFloor API listening on 0.0.0.0:${config.port}. Health: ${config.apiPrefix}/health`,
     );
   });
 }

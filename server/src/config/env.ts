@@ -49,8 +49,6 @@ export interface IntegrationReport {
 }
 
 const PRODUCTION_REQUIRED = [
-  "PORT",
-  "CLIENT_URL",
   "MONGODB_URI",
   "MONGODB_DATABASE",
   "AUTH_SECRET",
@@ -89,7 +87,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     );
   }
 
-  const portValue = source.PORT?.trim() || (nodeEnv === "production" ? "" : "5000");
+  // Render injects PORT. Local production builds may omit it.
+  const portValue = source.PORT?.trim() || "5000";
   const port = Number(portValue);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new ConfigError("PORT must be an integer between 1 and 65535.");
@@ -110,8 +109,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     }
   }
 
-  const clientUrl = blankToNull(source.CLIENT_URL) ?? "http://localhost:5173";
-  const serverUrl = blankToNull(source.SERVER_URL) ?? `http://localhost:${port}`;
+  // Render sets RENDER_EXTERNAL_URL (e.g. https://echofloor.onrender.com).
+  const renderUrl = blankToNull(source.RENDER_EXTERNAL_URL);
+  const clientUrl =
+    blankToNull(source.CLIENT_URL) ?? renderUrl ?? "http://localhost:5173";
+  const serverUrl =
+    blankToNull(source.SERVER_URL) ?? renderUrl ?? `http://localhost:${port}`;
 
   return {
     nodeEnv,

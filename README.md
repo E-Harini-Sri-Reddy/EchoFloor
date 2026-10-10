@@ -7,7 +7,6 @@ EchoFloor records and retrieves machine-specific operational knowledge. It does 
 ## What is implemented
 
 - React, TypeScript, and Vite client with separate administrator and worker navigation.
-- Example organisation **Northstar Manufacturing**, including machine **M-104 — Press Line 2**.
 - Browser-session fixtures for memories, alerts, shifts, and handovers. They are labeled as examples and are not a production database.
 - Administrator memory edits that open a confirmation dialog and change the session record only after confirmation.
 - A Node.js and Express API that validates environment variables and reports which integrations are configured. It does not serve organisation data yet.
@@ -23,8 +22,6 @@ npm run dev
 
 - Client: http://localhost:5173
 - API health: http://localhost:5000/api/v1/health
-
-The development entry screen is not production authentication. Demo password for the Northstar example accounts: `Northstar-demo-1`.
 
 Copy `.env.example` to `.env` if you do not already have one. Leave secrets blank until those services exist. The API stays up and reports them as unavailable.
 
@@ -44,6 +41,15 @@ npm test
 npm run build
 ```
 
+## Deploy on Render
+
+The app deploys as a single Render web service (API + built client). See **[DEPLOY_RENDER.md](./DEPLOY_RENDER.md)** for Atlas network access, Blueprint/`render.yaml` steps, env vars, and Google origin setup.
+
+```bash
+npm run build:render   # client + server
+npm start              # serves API and client/dist on PORT
+```
+
 ## Not connected yet
 
-MongoDB Atlas, session tokens, the AI provider, embeddings, speech-to-text, and n8n are configuration placeholders only. Google OAuth ID-token verification is implemented when `GOOGLE_CLIENT_ID` / `VITE_GOOGLE_CLIENT_ID` are set; organisation data still lives in browser-session fixtures until the data API exists. Voice recording stops with an unavailable transcription state. Text answers are assembled in the browser from the selected machine's example records and say so.
+AI provider, embeddings, speech-to-text, and n8n remain optional integrations. With `VITE_DATA_SOURCE=api` and a connected MongoDB URI, organisation data (machines, memberships, etc.) is loaded from Atlas after sign-in.

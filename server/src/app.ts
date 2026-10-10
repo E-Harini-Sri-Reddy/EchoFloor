@@ -4,6 +4,18 @@ import { GoogleAuthError, verifyGoogleIdToken } from "./auth/google.js";
 import { integrationReport, type AppConfig } from "./config/env.js";
 import { connectMongo, getDb } from "./db/mongo.js";
 import { registerWorkspaceRoutes } from "./routes/workspace.js";
+import { registerSpaFallback } from "./static.js";
+
+function corsOrigins(config: AppConfig): string[] | boolean {
+  const listed = config.clientUrl
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const origins = new Set(listed);
+  if (config.serverUrl) origins.add(config.serverUrl);
+  if (origins.size === 0) return true;
+  return [...origins];
+}
 
 export async function createApp(config: AppConfig) {
   await connectMongo(config).catch((error: unknown) => {
@@ -16,7 +28,7 @@ export async function createApp(config: AppConfig) {
   app.use(express.json({ limit: "1mb" }));
   app.use(
     cors({
-      origin: config.clientUrl,
+      origin: corsOrigins(config),
       credentials: true,
     }),
   );
@@ -84,6 +96,14 @@ export async function createApp(config: AppConfig) {
   });
 
   registerWorkspaceRoutes(app, config);
+
+  const spaMounted =
+    config.nodeEnv === "production"
+      ? registerSpaFallback(app, config.apiPrefix)
+      : false;
+  if (spaMounted) {
+    console.info("EchoFloor serving the built client from client/dist.");
+  }
 
   app.use((_request, response) => {
     response.status(404).json({

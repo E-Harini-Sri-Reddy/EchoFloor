@@ -42,6 +42,19 @@ test("production accepts a complete non-secret configuration", () => {
   assert.equal(integrationReport(config).mongodb.status, "configured");
 });
 
+test("production uses RENDER_EXTERNAL_URL when CLIENT_URL is omitted", () => {
+  const config = loadConfig({
+    NODE_ENV: "production",
+    PORT: "10000",
+    RENDER_EXTERNAL_URL: "https://echofloor.onrender.com",
+    MONGODB_URI: "mongodb+srv://user:secret@cluster.example.net/echofloor",
+    MONGODB_DATABASE: "echofloor",
+    AUTH_SECRET: "test-secret-value",
+  });
+  assert.equal(config.clientUrl, "https://echofloor.onrender.com");
+  assert.equal(config.serverUrl, "https://echofloor.onrender.com");
+});
+
 test("invalid PORT is rejected", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "development", PORT: "0" }), ConfigError);
 });
