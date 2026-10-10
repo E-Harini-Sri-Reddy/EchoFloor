@@ -1196,6 +1196,7 @@ export interface ReportMachineIssueInput {
   photoDataUrl: string;
   photoName: string;
   photoBytes: number;
+  photoSource: "camera" | "upload";
 }
 
 export function reportMachineIssue(
@@ -1220,9 +1221,12 @@ export function reportMachineIssue(
     fieldErrors.expiresAt = "Choose an end time in the future for this alert.";
   }
   if (!input.photoDataUrl?.startsWith("data:image/")) {
-    fieldErrors.photo = "A photo of the issue is required.";
+    fieldErrors.photo = "Take a photo with the camera or upload an image of the issue.";
   } else if (input.photoBytes > MAX_ISSUE_PHOTO_BYTES) {
     fieldErrors.photo = "Use a photo smaller than about 1.5 MB for this preview.";
+  }
+  if (input.photoSource !== "camera" && input.photoSource !== "upload") {
+    fieldErrors.photo = "Take a photo with the camera or upload an image of the issue.";
   }
   const issueKinds: MachineIssueKind[] = [
     "breakdown",
@@ -1257,15 +1261,22 @@ export function reportMachineIssue(
     machineId: input.machineId,
     type: input.issueKind === "maintenance" ? "maintenance" : "incident",
     title,
-    content: `${description}\n\nIssue kind: ${kindLabel}. Alert window until ${expires.toISOString()}. A photo was attached in this browser session.`,
+    content: `${description}\n\nIssue kind: ${kindLabel}. Alert window until ${expires.toISOString()}. A photo was ${input.photoSource === "camera" ? "taken with the camera" : "uploaded"} in this browser session and queued for AI false-report screening.`,
     summary: description.slice(0, 140),
     status: "unresolved",
     source: { type: "text", submittedBy: session.userId },
-    tags: ["issue-report", input.issueKind],
+    tags: ["issue-report", input.issueKind, `photo-${input.photoSource}`],
     currentRevision: 1,
     example: false,
     createdBy: session.userId,
     createdAt: now,
+    updatedAt: now,
+  };
+
+  const photoAiReview = {
+    status: "needs_admin_review" as const,
+    note:
+      "Photo queued for AI false-report screening. AI analysis is not run in this preview; an administrator should review the photo and decide whether the report looks false.",
     updatedAt: now,
   };
 
@@ -1279,14 +1290,18 @@ export function reportMachineIssue(
       ? `${machine!.machineCode}: ${title} — do not operate until window ends`
       : `${machine!.machineCode}: ${title}`,
     message: doNotOperate
-      ? `${machine!.machineCode} (${machine!.name}) — ${kindLabel}. ${description} No personnel should operate this machine until ${expires.toISOString()}. Reported by ${session.displayName}.`
-      : `${machine!.machineCode} (${machine!.name}) — ${kindLabel}. ${description} Reported by ${session.displayName}.`,
+      ? `${machine!.machineCode} (${machine!.name}) — ${kindLabel}. ${description} No personnel should operate this machine until ${expires.toISOString()}. Reported by ${session.displayName}. Photo awaiting admin review for possible false reporting.`
+      : `${machine!.machineCode} (${machine!.name}) — ${kindLabel}. ${description} Reported by ${session.displayName}. Photo awaiting admin review for possible false reporting.`,
     status: "open",
     sourceType: "issue_report",
     sourceId: memory.id,
     expiresAt: expires.toISOString(),
     photoDataUrl: input.photoDataUrl,
-    photoName: input.photoName || "issue-photo.jpg",
+    photoName:
+      input.photoName ||
+      (input.photoSource === "camera" ? "camera-capture.jpg" : "issue-photo.jpg"),
+    photoSource: input.photoSource,
+    photoAiReview,
     issueKind: input.issueKind,
     reportedBy: session.userId,
     createdAt: now,
@@ -1420,6 +1435,52 @@ export function createTask(
           "task",
           task.id,
           `Assigned “${task.title}” (${task.priority}) to a worker.`,
+        ),
+      ],
+    },
+  };
+}
+
+export function acceptShiftAssignment(
+  db: DemoDatabase,
+  assignmentId: string,
+): OperationResult {
+  if (!db.session) return fail("FORBIDDEN", "Sign in is required.");
+  const session = db.session;
+  const assignment = db.assignments.find(
+    (item) =>
+      item.id === assignmentId && item.organisationId === session.organisationId,
+  );
+  if (!assignment) {
+    return fail("NOT_FOUND", "That shift assignment was not found.");
+  }
+  if (assignment.userId !== session.userId && session.role !== "admin") {
+    return fail("FORBIDDEN", "Only the assigned worker can acknowledge this assignment.");
+  }
+  if (assignment.status === "accepted" || assignment.status === "completed") {
+    return { ok: true, db };
+  }
+  if (assignment.status === "cancelled") {
+    return fail("CONFLICT", "A cancelled assignment cannot be acknowledged.");
+  }
+  const now = new Date().toISOString();
+  return {
+    ok: true,
+    db: {
+      ...db,
+      assignments: db.assignments.map((item) =>
+        item.id === assignment.id
+          ? { ...item, status: "accepted" as const, updatedAt: now }
+          : item,
+      ),
+      auditEvents: [
+        ...db.auditEvents,
+        audit(
+          session,
+          "assignment.accept",
+          "assignment",
+          assignment.id,
+          "Acknowledged a shift assignment.",
         ),
       ],
     },

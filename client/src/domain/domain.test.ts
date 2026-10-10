@@ -11,6 +11,8 @@ import {
   assignWorkerToShift,
   createReport,
   createTask,
+  acceptShiftAssignment,
+  acknowledgeAlert,
   inviteWorker,
   loginAsEmail,
   loginWithGoogle,
@@ -23,6 +25,7 @@ import {
   updateTaskStatus,
 } from "@/domain/operations";
 import { authProvidersOf } from "@/domain/credentials";
+import { notificationsForSession } from "@/domain/notifications";
 import {
   alertsFor,
   liveAlertsFor,
@@ -109,6 +112,7 @@ describe("live operational alerts", () => {
       photoDataUrl: "",
       photoName: "",
       photoBytes: 0,
+      photoSource: "upload",
     });
     expect(missingPhoto.ok).toBe(false);
 
@@ -121,11 +125,14 @@ describe("live operational alerts", () => {
       photoDataUrl: "data:image/png;base64,aaa",
       photoName: "jam.png",
       photoBytes: 120,
+      photoSource: "camera",
     });
     expect(created.ok).toBe(true);
     if (created.ok) {
       expect(created.data?.type).toBe("machine_breakdown");
       expect(created.data?.photoDataUrl).toContain("data:image/");
+      expect(created.data?.photoSource).toBe("camera");
+      expect(created.data?.photoAiReview?.status).toBe("needs_admin_review");
       expect(
         liveAlertsFor(created.db, IDS.northstar, {
           now: new Date(),
@@ -363,6 +370,7 @@ describe("permanent and temporary worker access", () => {
       expect(temporaryWorkerMayOpen("/worker/voice")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/history")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/alerts")).toBe(true);
+      expect(temporaryWorkerMayOpen("/worker/report-issue")).toBe(true);
       expect(temporaryWorkerMayOpen("/worker/summary")).toBe(false);
       expect(temporaryWorkerMayOpen("/worker/machines")).toBe(false);
     }
@@ -422,6 +430,64 @@ describe("permanent and temporary worker access", () => {
     const damage = damageRepairMemoriesFor(admin, IDS.northstar);
     expect(damage.some((memory) => memory.id === IDS.seal)).toBe(true);
     expect(damage.some((memory) => memory.id === IDS.m104Usage)).toBe(false);
+  });
+});
+
+describe("notifications", () => {
+  it("drops alert and task notices after acknowledge or start", () => {
+    const worker = asWorker(createSeed());
+    const before = notificationsForSession(worker, worker.session!);
+    expect(before.some((item) => item.kind === "alert")).toBe(true);
+    expect(before.some((item) => item.kind === "task")).toBe(true);
+
+    const openAlert = worker.alerts.find(
+      (alert) =>
+        alert.organisationId === IDS.northstar &&
+        alert.status === "open" &&
+        alert.severity !== "info",
+    );
+    if (!openAlert) throw new Error("missing open alert");
+    const acked = acknowledgeAlert(worker, openAlert.id);
+    expect(acked.ok).toBe(true);
+    if (!acked.ok) return;
+
+    const afterAck = notificationsForSession(acked.db, acked.db.session!);
+    expect(afterAck.some((item) => item.id === `alert:${openAlert.id}`)).toBe(false);
+
+    const openTask = acked.db.tasks.find(
+      (task) => task.assigneeUserId === IDS.luis && task.status === "open",
+    );
+    if (!openTask) throw new Error("missing open task");
+    const started = updateTaskStatus(acked.db, openTask.id, "in_progress");
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const afterStart = notificationsForSession(started.db, started.db.session!);
+    expect(afterStart.some((item) => item.id === `task:${openTask.id}`)).toBe(false);
+  });
+
+  it("drops assignment notices after accept for a permanent worker", () => {
+    let db = createSeed();
+    // Give Luis an unacknowledged assignment for this check.
+    db = {
+      ...db,
+      assignments: db.assignments.map((item) =>
+        item.id === IDS.luisAssignment
+          ? { ...item, status: "assigned" as const }
+          : item,
+      ),
+    };
+    const worker = asWorker(db);
+    const before = notificationsForSession(worker, worker.session!);
+    expect(before.some((item) => item.id === `assignment:${IDS.luisAssignment}`)).toBe(
+      true,
+    );
+    const accepted = acceptShiftAssignment(worker, IDS.luisAssignment);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    const after = notificationsForSession(accepted.db, accepted.db.session!);
+    expect(after.some((item) => item.id === `assignment:${IDS.luisAssignment}`)).toBe(
+      false,
+    );
   });
 });
 

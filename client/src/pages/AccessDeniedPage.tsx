@@ -12,7 +12,7 @@ export function AccessDeniedPage() {
         <h1>Access denied</h1>
         <p>
           {temporary
-            ? "Temporary workers can use Voice with an overall usage summary, and History for damage and repair logs. They cannot open detailed daily work logs, alerts, My Shift, Memory Explorer, or full machine operational memory."
+            ? "Temporary workers can use Voice with an overall usage summary, Report Issue with a photo, Live Alerts, Tasks, and History for damage and repair logs. They cannot open detailed daily work logs, My Shift, Memory Explorer, or full machine operational memory."
             : "This area is not available for the current role. Workers cannot open Memory Explorer or edit existing memories. Temporary workers have a narrower workspace than permanent workers."}
         </p>
         <p>

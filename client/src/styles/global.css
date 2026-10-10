@@ -273,21 +273,89 @@ p {
   padding: 0 4px;
 }
 
-.profile {
+.profile,
+.notify {
   position: relative;
 }
 
-.profile-menu {
+.profile-menu,
+.notify-menu {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  width: min(280px, 80vw);
+  width: min(320px, 85vw);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   padding: var(--space-2);
   z-index: 20;
+}
+
+.notify-menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 8px 10px 4px;
+}
+
+.notify-empty {
+  padding: 8px 10px 12px;
+  margin: 0;
+}
+
+.notify-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: min(60vh, 420px);
+  overflow: auto;
+}
+
+.notify-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  border-radius: var(--radius-control);
+  color: inherit;
+  text-decoration: none;
+}
+
+.notify-item:hover,
+.notify-item:focus-visible {
+  background: var(--color-canvas);
+}
+
+.notify-go {
+  font-size: 0.85rem;
+  color: var(--color-info);
+  font-weight: 600;
+}
+
+.card.is-highlighted {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.toast-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+}
+
+.toast-action {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--color-primary);
 }
 
 .menu-item:hover {
@@ -350,6 +418,51 @@ p {
   border-left-color: var(--color-warning);
 }
 
+.issue-photo-section {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-canvas);
+}
+
+.issue-photo-section.has-error {
+  border-color: var(--color-danger);
+  background: #fdf4f4;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.issue-photo-actions {
+  flex-wrap: wrap;
+}
+
+.issue-camera-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.issue-camera-preview {
+  width: 100%;
+  min-height: 220px;
+  max-height: 360px;
+  object-fit: cover;
+  border-radius: var(--radius-card);
+  background: #111;
+  border: 1px solid var(--color-border);
+}
+
 .issue-photo-preview {
   margin: 0;
   display: grid;
@@ -362,7 +475,7 @@ p {
   object-fit: contain;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
-  background: var(--color-canvas);
+  background: var(--color-surface);
 }
 
 .metric-grid,

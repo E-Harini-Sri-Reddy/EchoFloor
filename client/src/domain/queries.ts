@@ -208,10 +208,9 @@ export function filterAlerts(alerts: Alert[], filter: AlertFilter): Alert[] {
   });
 }
 
+/** Unacknowledged alerts only — acknowledging clears them from the badge count. */
 export function countOpenAlerts(alerts: Alert[]): number {
-  return alerts.filter(
-    (alert) => alert.status === "open" || alert.status === "acknowledged",
-  ).length;
+  return alerts.filter((alert) => alert.status === "open").length;
 }
 
 export function unresolvedMemories(memories: MemoryRecord[]): MemoryRecord[] {

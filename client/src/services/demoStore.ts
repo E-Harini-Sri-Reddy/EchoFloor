@@ -1,5 +1,6 @@
 import { createSeed } from "@/fixtures/seed";
 import {
+  acceptShiftAssignment,
   acknowledgeAlert,
   acknowledgeHandover,
   assignWorkerToShift,
@@ -174,6 +175,8 @@ export const demoStore = {
   publishHandover: (handoverId: string) => apply(publishHandover(database, handoverId)),
   acknowledgeHandover: (handoverId: string) =>
     apply(acknowledgeHandover(database, handoverId)),
+  acceptShiftAssignment: (assignmentId: string) =>
+    apply(acceptShiftAssignment(database, assignmentId)),
   updateShiftPolicy: (input: UpdateShiftPolicyInput) =>
     apply(updateShiftPolicy(database, input)),
   assignWorkerToShift: (input: AssignWorkerToShiftInput) =>

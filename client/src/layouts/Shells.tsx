@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   homePathForSession,
   isTemporaryWorker,
@@ -7,7 +7,10 @@ import {
   membershipAllowsLogin,
 } from "@/domain/access";
 import { labelSessionRole } from "@/domain/labels";
-import { countOpenAlerts, liveAlertsFor } from "@/domain/queries";
+import {
+  countNotifications,
+  notificationsForSession,
+} from "@/domain/notifications";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { demoStore } from "@/services/demoStore";
 import { getClientConfig } from "@/services/clientConfig";
@@ -25,6 +28,7 @@ const adminNav: NavItem[] = [
   { to: "/admin/machines", label: "Machine Details", short: "Machines" },
   { to: "/admin/tasks", label: "Tasks", short: "Tasks" },
   { to: "/admin/voice", label: "Voice Assistant", short: "Voice" },
+  { to: "/admin/report-issue", label: "Report Issue", short: "Report" },
   { to: "/admin/memories", label: "Memory Explorer", short: "Memory" },
   { to: "/admin/handover", label: "Shifts & Handover", short: "Shifts" },
   { to: "/admin/alerts", label: "Live Alerts", short: "Alerts" },
@@ -36,6 +40,7 @@ const permanentWorkerNav: NavItem[] = [
   { to: "/worker/machines", label: "Machine Details", short: "Machines" },
   { to: "/worker/tasks", label: "My Tasks", short: "Tasks" },
   { to: "/worker/voice", label: "Voice Assistant", short: "Voice" },
+  { to: "/worker/report-issue", label: "Report Issue", short: "Report" },
   { to: "/worker/alerts", label: "Live Alerts", short: "Alerts" },
   { to: "/worker/shift", label: "My Shift", short: "My Shift" },
   { to: "/worker/settings", label: "Settings", short: "Settings" },
@@ -43,15 +48,16 @@ const permanentWorkerNav: NavItem[] = [
 
 const temporaryWorkerNav: NavItem[] = [
   { to: "/worker/voice", label: "Voice", short: "Voice" },
+  { to: "/worker/report-issue", label: "Report Issue", short: "Report" },
   { to: "/worker/alerts", label: "Live Alerts", short: "Alerts" },
   { to: "/worker/tasks", label: "Tasks", short: "Tasks" },
   { to: "/worker/history", label: "History", short: "History" },
   { to: "/worker/settings", label: "Settings", short: "Settings" },
 ];
 
-const adminMobile = ["Overview", "Machines", "Tasks", "Alerts"];
-const permanentWorkerMobile = ["Home", "Tasks", "Voice", "Alerts", "My Shift"];
-const temporaryWorkerMobile = ["Voice", "Alerts", "History"];
+const adminMobile = ["Overview", "Machines", "Report", "Alerts"];
+const permanentWorkerMobile = ["Home", "Report", "Voice", "Alerts", "My Shift"];
+const temporaryWorkerMobile = ["Voice", "Report", "Alerts", "History"];
 
 export function AdminShell() {
   return <Shell items={adminNav} mobileLabels={adminMobile} home="/admin" />;
@@ -84,6 +90,7 @@ function Shell({
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [notifyOpen, setNotifyOpen] = useState(false);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [attempt, setAttempt] = useState(0);
 
@@ -112,7 +119,14 @@ function Shell({
   useEffect(() => {
     setMenuOpen(false);
     setMoreOpen(false);
+    setNotifyOpen(false);
   }, [location.pathname]);
+
+  const notifications = useMemo(
+    () => (session ? notificationsForSession(db, session) : []),
+    [db, session],
+  );
+  const notificationCount = countNotifications(notifications);
 
   if (!session) return null;
 
@@ -127,11 +141,6 @@ function Shell({
 
   const organisation = db.organisations.find(
     (item) => item.id === session.organisationId,
-  );
-  const openAlerts = countOpenAlerts(
-    liveAlertsFor(db, session.organisationId, {
-      audienceUserId: session.role === "worker" ? session.userId : undefined,
-    }),
   );
   const membership = db.memberships.find(
     (item) =>
@@ -200,14 +209,55 @@ function Shell({
                 More
               </button>
             ) : null}
-            <NavLink
-              className="icon-button"
-              to={session.role === "admin" ? "/admin/alerts" : "/worker/alerts"}
-              aria-label={`${openAlerts} active live alerts`}
-            >
-              <span aria-hidden="true">!</span>
-              {openAlerts > 0 ? <span className="alert-count">{openAlerts}</span> : null}
-            </NavLink>
+            <div className="notify">
+              <button
+                type="button"
+                className="icon-button"
+                aria-haspopup="menu"
+                aria-expanded={notifyOpen}
+                aria-label={`${notificationCount} notifications`}
+                onClick={() => {
+                  setNotifyOpen((open) => !open);
+                  setMenuOpen(false);
+                }}
+              >
+                <span aria-hidden="true">!</span>
+                {notificationCount > 0 ? (
+                  <span className="alert-count">{notificationCount}</span>
+                ) : null}
+              </button>
+              {notifyOpen ? (
+                <div className="notify-menu" role="menu" aria-label="Notifications">
+                  <div className="notify-menu-head">
+                    <strong>Notifications</strong>
+                    <span className="muted">{notificationCount} open</span>
+                  </div>
+                  {notifications.length === 0 ? (
+                    <p className="muted notify-empty">
+                      No open alerts or waiting tasks. Acknowledged alerts and started
+                      work leave this list.
+                    </p>
+                  ) : (
+                    <ul className="notify-list">
+                      {notifications.map((item) => (
+                        <li key={item.id}>
+                          <Link
+                            className="notify-item"
+                            role="menuitem"
+                            to={item.to}
+                            onClick={() => setNotifyOpen(false)}
+                          >
+                            <strong>{item.title}</strong>
+                            <span className="muted">{item.message}</span>
+                            <span className="notify-go">Open</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : null}
+            </div>
             <div className="profile">
               <button
                 type="button"
@@ -215,7 +265,10 @@ function Shell({
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 aria-label="Account menu"
-                onClick={() => setMenuOpen((open) => !open)}
+                onClick={() => {
+                  setMenuOpen((open) => !open);
+                  setNotifyOpen(false);
+                }}
               >
                 {session.displayName.slice(0, 1)}
               </button>

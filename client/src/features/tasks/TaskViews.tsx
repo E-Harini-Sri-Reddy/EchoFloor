@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
 import { EmptyState } from "@/components/ui/States";
@@ -27,6 +27,8 @@ export function AdminTasksPage() {
   const db = useDemoDatabase();
   const session = db.session;
   const toast = useToast();
+  const [params] = useSearchParams();
+  const focusTaskId = params.get("task");
   const workers = session ? activeWorkerRows(db, session.organisationId) : [];
   const machines = session ? machinesFor(db, session.organisationId) : [];
   const [assigneeUserId, setAssigneeUserId] = useState(workers[0]?.membership.userId ?? "");
@@ -38,6 +40,11 @@ export function AdminTasksPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<"openish" | "all">("openish");
+  useEffect(() => {
+    if (!focusTaskId) return;
+    const node = document.getElementById(`task-${focusTaskId}`);
+    node?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusTaskId]);
   if (!session) return null;
 
   const timezone =
@@ -192,6 +199,7 @@ export function AdminTasksPage() {
               timezone={timezone}
               showAssignee
               canCancel
+              highlighted={task.id === focusTaskId}
             />
           ))}
         </div>
@@ -203,6 +211,13 @@ export function AdminTasksPage() {
 export function WorkerTasksPage() {
   const db = useDemoDatabase();
   const session = db.session;
+  const [params] = useSearchParams();
+  const focusTaskId = params.get("task");
+  useEffect(() => {
+    if (!focusTaskId) return;
+    const node = document.getElementById(`task-${focusTaskId}`);
+    node?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focusTaskId]);
   if (!session) return null;
   const timezone =
     db.organisations.find((item) => item.id === session.organisationId)?.settings
@@ -222,7 +237,8 @@ export function WorkerTasksPage() {
           <h2>My tasks</h2>
           <p className="lede">
             Work assigned to you by an administrator, with priority. Completing a task
-            here only updates this browser session.
+            here only updates this browser session. Starting work clears the task from
+            the notification badge.
           </p>
         </div>
       </header>
@@ -235,7 +251,12 @@ export function WorkerTasksPage() {
       ) : (
         <div className="stack">
           {openTasks.map((task) => (
-            <TaskCard key={task.id} task={task} timezone={timezone} />
+            <TaskCard
+              key={task.id}
+              task={task}
+              timezone={timezone}
+              highlighted={task.id === focusTaskId}
+            />
           ))}
         </div>
       )}
@@ -258,11 +279,13 @@ function TaskCard({
   timezone,
   showAssignee = false,
   canCancel = false,
+  highlighted = false,
 }: {
   task: Task;
   timezone: string;
   showAssignee?: boolean;
   canCancel?: boolean;
+  highlighted?: boolean;
 }) {
   const db = useDemoDatabase();
   const toast = useToast();
@@ -277,6 +300,8 @@ function TaskCard({
       item.userId === task.assigneeUserId &&
       item.organisationId === task.organisationId,
   );
+  const tasksPath =
+    db.session?.role === "admin" ? "/admin/tasks" : "/worker/tasks";
 
   async function setStatus(status: TaskStatus) {
     setBusy(status);
@@ -287,11 +312,21 @@ function TaskCard({
       toast.push(result.message);
       return;
     }
-    toast.push(`Task marked ${labelTaskStatus(status).toLowerCase()} in this session.`);
+    const cleared =
+      status === "in_progress" || status === "completed" || status === "cancelled";
+    toast.push(
+      cleared
+        ? `Task marked ${labelTaskStatus(status).toLowerCase()}. It left the notification badge.`
+        : `Task marked ${labelTaskStatus(status).toLowerCase()} in this session.`,
+      cleared ? { to: `${tasksPath}?task=${encodeURIComponent(task.id)}` } : undefined,
+    );
   }
 
   return (
-    <article className="card stack">
+    <article
+      id={`task-${task.id}`}
+      className={highlighted ? "card stack is-highlighted" : "card stack"}
+    >
       <div className="spread">
         <strong>{task.title}</strong>
         <div className="row">

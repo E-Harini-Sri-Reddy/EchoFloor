@@ -539,11 +539,14 @@ export function MyShiftPage() {
     await delay(300);
     const result = demoStore.acknowledgeHandover(handover.id);
     setPending(false);
-    toast.push(
-      result.ok
-        ? "Acknowledgement saved in this browser session. It does not verify the records."
-        : result.message,
-    );
+    if (result.ok) {
+      toast.push(
+        "Handover acknowledged. It left the notification badge. This does not verify the records.",
+        { to: "/worker/shift" },
+      );
+    } else {
+      toast.push(result.message);
+    }
   }
 
   if (!shift) {
@@ -559,6 +562,21 @@ export function MyShiftPage() {
 
   const assignment = assignments.find((item) => item.shiftId === shift.id);
 
+  async function acceptAssignment() {
+    if (!assignment) return;
+    setPending(true);
+    await delay(300);
+    const result = demoStore.acceptShiftAssignment(assignment.id);
+    setPending(false);
+    if (result.ok) {
+      toast.push("Assignment acknowledged. It left the notification badge.", {
+        to: "/worker/shift",
+      });
+    } else {
+      toast.push(result.message);
+    }
+  }
+
   return (
     <div className="page">
       <header className="page-header">
@@ -570,7 +588,14 @@ export function MyShiftPage() {
             {labelShiftRotation(policy.rotation)} rotation
           </p>
         </div>
-        <StatusBadge status="info" label={assignment?.status ?? "assigned"} />
+        <div className="row">
+          <StatusBadge status="info" label={assignment?.status ?? "assigned"} />
+          {assignment?.status === "assigned" ? (
+            <Button onClick={() => void acceptAssignment()} loading={pending}>
+              Acknowledge assignment
+            </Button>
+          ) : null}
+        </div>
       </header>
       <section className="card stack">
         <h3>Assigned machines</h3>

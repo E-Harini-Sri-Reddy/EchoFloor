@@ -78,7 +78,10 @@ export function AdminOverviewPage() {
           </p>
         </div>
         <div className="row">
-          <ButtonLink to="/admin/tasks">Assign tasks</ButtonLink>
+          <ButtonLink to="/admin/report-issue">Report issue</ButtonLink>
+          <ButtonLink to="/admin/tasks" variant="secondary">
+            Assign tasks
+          </ButtonLink>
           <ButtonLink to="/admin/voice" variant="secondary">
             Open Voice Assistant
           </ButtonLink>
@@ -94,7 +97,7 @@ export function AdminOverviewPage() {
           <strong>{openTasks.length}</strong>
         </article>
         <article className="metric">
-          <span>Open application alerts</span>
+          <span>Unacknowledged alerts</span>
           <strong>{countOpenAlerts(alerts)}</strong>
         </article>
         <article className="metric">

@@ -90,6 +90,26 @@ export type MachineIssueKind =
   | "unsafe";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 export type TaskStatus = "open" | "in_progress" | "completed" | "cancelled";
+/** How the issue photo was obtained in the browser. */
+export type IssuePhotoSource = "camera" | "upload";
+/**
+ * AI false-report screening for issue photos.
+ * queued: waiting for AI (not run in this mockup yet)
+ * needs_admin_review: admin should inspect the photo / report
+ * cleared: AI or admin treated it as plausible
+ * flagged_false: suspected false report
+ */
+export type IssuePhotoAiReviewStatus =
+  | "queued"
+  | "needs_admin_review"
+  | "cleared"
+  | "flagged_false";
+
+export interface IssuePhotoAiReview {
+  status: IssuePhotoAiReviewStatus;
+  note: string;
+  updatedAt: string;
+}
 
 export interface Organisation {
   id: string;
@@ -331,6 +351,9 @@ export interface Alert {
   /** Browser-session photo (data URL). Not uploaded to a server in this mockup. */
   photoDataUrl?: string;
   photoName?: string;
+  photoSource?: IssuePhotoSource;
+  /** Present on machine issue reports; AI screening is not executed in this preview. */
+  photoAiReview?: IssuePhotoAiReview;
   issueKind?: MachineIssueKind;
   reportedBy?: string;
   createdAt: string;

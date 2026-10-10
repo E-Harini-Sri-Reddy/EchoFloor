@@ -1,13 +1,16 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { Button } from "@/components/ui/Button";
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Button, ButtonLink } from "@/components/ui/Button";
 import { Field, TextInput } from "@/components/ui/Field";
 import { useToast } from "@/components/ui/Toast";
 import {
-  MAX_ISSUE_PHOTO_BYTES,
   issueDurationPresets,
   labelMachineIssueKind,
 } from "@/domain/alerts";
+import {
+  IssuePhotoCapture,
+  type IssuePhotoValue,
+} from "@/features/alerts/IssuePhotoCapture";
 import { machinesFor } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
 import { demoStore } from "@/services/demoStore";
@@ -36,43 +39,13 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
   const [description, setDescription] = useState("");
   const [durationId, setDurationId] = useState("2h");
   const [customEnd, setCustomEnd] = useState("");
-  const [photoDataUrl, setPhotoDataUrl] = useState("");
-  const [photoName, setPhotoName] = useState("");
-  const [photoBytes, setPhotoBytes] = useState(0);
+  const [photo, setPhoto] = useState<IssuePhotoValue | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   if (!session) return null;
 
-  const alertsPath = role === "admin" ? "/admin/alerts" : "/worker/alerts";
-
-  async function onPhotoChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    setErrors((current) => ({ ...current, photo: "" }));
-    if (!file) {
-      setPhotoDataUrl("");
-      setPhotoName("");
-      setPhotoBytes(0);
-      return;
-    }
-    if (!file.type.startsWith("image/")) {
-      setErrors((current) => ({
-        ...current,
-        photo: "Choose an image file (for example JPG or PNG).",
-      }));
-      return;
-    }
-    if (file.size > MAX_ISSUE_PHOTO_BYTES) {
-      setErrors((current) => ({
-        ...current,
-        photo: "Use a photo smaller than about 1.5 MB for this preview.",
-      }));
-      return;
-    }
-    const dataUrl = await readFileAsDataUrl(file);
-    setPhotoDataUrl(dataUrl);
-    setPhotoName(file.name);
-    setPhotoBytes(file.size);
-  }
+  const base = role === "admin" ? "/admin" : "/worker";
+  const alertsPath = `${base}/alerts`;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -91,9 +64,10 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
       title,
       description,
       expiresAt,
-      photoDataUrl,
-      photoName,
-      photoBytes,
+      photoDataUrl: photo?.dataUrl ?? "",
+      photoName: photo?.name ?? "",
+      photoBytes: photo?.bytes ?? 0,
+      photoSource: photo?.source ?? "upload",
     });
     setSaving(false);
     if (!result.ok) {
@@ -102,7 +76,7 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
       return;
     }
     toast.push(
-      "Issue reported in this browser session. It appears in Live Alerts until the window ends. The photo was not uploaded to a server.",
+      "Issue reported. The photo is queued for AI false-report screening and an administrator should review it. Stored in this browser session only.",
     );
     navigate(alertsPath);
   }
@@ -114,9 +88,14 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
           <h2>Report a machine issue</h2>
           <p className="lede">
             Report breakdown, damage, maintenance holds, or unsafe conditions. A photo is
-            required. The alert stays in Live Alerts only until the chosen window ends.
+            required — take one with the camera or upload from this device. AI will later
+            screen photos for possible false reports and ask an administrator to look into
+            flagged cases.
           </p>
         </div>
+        <ButtonLink to={alertsPath} variant="secondary">
+          View Live Alerts
+        </ButtonLink>
       </header>
       <form className="card form-grid" onSubmit={onSubmit} noValidate>
         <Field label="Machine" htmlFor="issue-machine" error={errors.machineId}>
@@ -195,41 +174,26 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
             />
           </Field>
         ) : null}
-        <Field
-          label="Photo of the issue"
-          htmlFor="issue-photo"
+
+        <IssuePhotoCapture
+          value={photo}
           error={errors.photo}
-          hint="Required. Kept in this browser session only — not sent to a server in this preview."
-        >
-          <input
-            id="issue-photo"
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(event) => void onPhotoChange(event)}
-          />
-        </Field>
-        {photoDataUrl ? (
-          <figure className="issue-photo-preview">
-            <img src={photoDataUrl} alt="Selected issue photo preview" />
-            <figcaption className="muted">
-              {photoName} · {Math.round(photoBytes / 1024)} KB
-            </figcaption>
-          </figure>
-        ) : null}
-        <Button type="submit" loading={saving}>
-          Submit issue report
-        </Button>
+          onChange={(next) => {
+            setPhoto(next);
+            setErrors((current) => ({ ...current, photo: "" }));
+          }}
+          onError={(message) => setErrors((current) => ({ ...current, photo: message }))}
+        />
+
+        <div className="row">
+          <Button type="submit" loading={saving}>
+            Submit issue report
+          </Button>
+          <Link className="btn btn-tertiary" to={alertsPath}>
+            Cancel
+          </Link>
+        </div>
       </form>
     </div>
   );
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(new Error("Could not read the photo."));
-    reader.readAsDataURL(file);
-  });
 }

@@ -78,11 +78,15 @@ export function AppRouter() {
         <Route path="machines/:machineId" element={<MachineDetailPage role="admin" />} />
         <Route path="tasks" element={<AdminTasksPage />} />
         <Route path="voice" element={<VoiceAssistantPage role="admin" />} />
+        <Route path="report-issue" element={<ReportIssuePage role="admin" />} />
         <Route path="memories" element={<MemoryExplorerPage />} />
         <Route path="memories/:memoryId" element={<MemoryDetailPage />} />
         <Route path="handover" element={<HandoverPage />} />
         <Route path="alerts" element={<AlertListPage role="admin" />} />
-        <Route path="alerts/report" element={<ReportIssuePage role="admin" />} />
+        <Route
+          path="alerts/report"
+          element={<Navigate to="/admin/report-issue" replace />}
+        />
         <Route path="alerts/:alertId" element={<AlertDetailPage role="admin" />} />
         <Route path="settings" element={<SettingsPage role="admin" />} />
       </Route>
@@ -114,12 +118,16 @@ export function AppRouter() {
           }
         />
         <Route path="voice" element={<VoiceAssistantPage role="worker" />} />
+        <Route path="report-issue" element={<ReportIssuePage role="worker" />} />
         <Route path="tasks" element={<WorkerTasksPage />} />
         <Route path="history" element={<DamageRepairListPage />} />
         <Route path="history/:memoryId" element={<DamageRepairDetailPage />} />
         <Route path="summary" element={<Navigate to="/worker/voice" replace />} />
         <Route path="alerts" element={<AlertListPage role="worker" />} />
-        <Route path="alerts/report" element={<ReportIssuePage role="worker" />} />
+        <Route
+          path="alerts/report"
+          element={<Navigate to="/worker/report-issue" replace />}
+        />
         <Route path="alerts/:alertId" element={<AlertDetailPage role="worker" />} />
         <Route
           path="shift"

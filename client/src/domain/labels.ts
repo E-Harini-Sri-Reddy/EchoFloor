@@ -70,6 +70,21 @@ export function labelAlertStatus(status: AlertStatus): string {
   }
 }
 
+export function labelIssuePhotoAiReview(
+  status: "queued" | "needs_admin_review" | "cleared" | "flagged_false",
+): string {
+  switch (status) {
+    case "queued":
+      return "AI screening queued";
+    case "needs_admin_review":
+      return "Admin review requested";
+    case "cleared":
+      return "Photo cleared";
+    case "flagged_false":
+      return "Suspected false report";
+  }
+}
+
 export function labelAlertType(type: AlertType): string {
   switch (type) {
     case "machine_breakdown":

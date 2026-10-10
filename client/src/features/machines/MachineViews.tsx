@@ -194,7 +194,7 @@ export function MachineDetailPage({ role }: { role: "admin" | "worker" }) {
             status={machine.status}
             label={labelMachineStatus(machine.status)}
           />
-          <ButtonLink to={`${base}/alerts/report?machine=${machine.id}`} variant="secondary">
+          <ButtonLink to={`${base}/report-issue?machine=${machine.id}`} variant="secondary">
             Report issue
           </ButtonLink>
           <ButtonLink to={`${base}/voice?machine=${machine.id}`} variant="primary">

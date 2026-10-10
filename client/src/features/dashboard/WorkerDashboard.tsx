@@ -62,9 +62,20 @@ export function WorkerDashboardPage() {
             This is not a clock-in record.
           </p>
         </div>
-        <ButtonLink to="/worker/voice">Ask or report</ButtonLink>
+        <div className="row">
+          <ButtonLink to="/worker/report-issue">Report issue</ButtonLink>
+          <ButtonLink to="/worker/voice" variant="secondary">
+            Ask or report
+          </ButtonLink>
+        </div>
       </header>
       <div className="card-grid">
+        <Link className="list-card" to="/worker/report-issue">
+          <strong>Report machine issue</strong>
+          <span className="muted">
+            Breakdown, damage, or unsafe condition — photo required.
+          </span>
+        </Link>
         <Link className="list-card" to="/worker/tasks">
           <strong>My tasks</strong>
           <span className="muted">

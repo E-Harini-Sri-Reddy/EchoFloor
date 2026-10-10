@@ -6,7 +6,12 @@ import { EmptyState } from "@/components/ui/States";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useToast } from "@/components/ui/Toast";
 import { labelMachineIssueKind } from "@/domain/alerts";
-import { labelAlertStatus, labelAlertType, labelSeverity } from "@/domain/labels";
+import {
+  labelAlertStatus,
+  labelAlertType,
+  labelIssuePhotoAiReview,
+  labelSeverity,
+} from "@/domain/labels";
 import {
   alertById,
   filterAlerts,
@@ -50,7 +55,7 @@ export function AlertListPage({ role }: { role: "admin" | "worker" }) {
             ends.
           </p>
         </div>
-        <ButtonLink to={`${base}/alerts/report`}>Report an issue</ButtonLink>
+        <ButtonLink to={`${base}/report-issue`}>Report an issue</ButtonLink>
       </header>
       <div className="tabs" role="tablist" aria-label="Alert filters">
         {(
@@ -100,7 +105,7 @@ export function AlertListPage({ role }: { role: "admin" | "worker" }) {
         <EmptyState
           title="No active alerts"
           message="Nothing damaged, under maintenance, or unsafe matches this filter. Expired windows are removed automatically."
-          action={<ButtonLink to={`${base}/alerts/report`}>Report an issue</ButtonLink>}
+          action={<ButtonLink to={`${base}/report-issue`}>Report an issue</ButtonLink>}
         />
       ) : (
         <div className="stack">
@@ -175,9 +180,13 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
     await delay(300);
     const result = demoStore.acknowledgeAlert(alert!.id);
     setPending(null);
-    toast.push(
-      result.ok ? "Alert acknowledged in this browser session." : result.message,
-    );
+    if (result.ok) {
+      toast.push("Alert acknowledged. It left the notification badge.", {
+        to: `${base}/alerts`,
+      });
+    } else {
+      toast.push(result.message);
+    }
   }
 
   async function resolve() {
@@ -218,9 +227,31 @@ export function AlertDetailPage({ role }: { role: "admin" | "worker" }) {
           <figure className="issue-photo-preview">
             <img src={alert.photoDataUrl} alt={alert.photoName ?? "Issue photo"} />
             <figcaption className="muted">
-              {alert.photoName ?? "Attached photo"} · stored in this browser session only
+              {alert.photoSource === "camera" ? "Taken with camera" : "Uploaded from device"}
+              {alert.photoName ? ` · ${alert.photoName}` : ""} · stored in this browser
+              session only
             </figcaption>
           </figure>
+        ) : null}
+        {alert.photoAiReview ? (
+          <div
+            className={
+              alert.photoAiReview.status === "flagged_false" ||
+              alert.photoAiReview.status === "needs_admin_review"
+                ? "notice notice-warning"
+                : "notice"
+            }
+            role="status"
+          >
+            <strong>{labelIssuePhotoAiReview(alert.photoAiReview.status)}</strong>
+            <p>{alert.photoAiReview.note}</p>
+            {role === "admin" ? (
+              <p className="muted">
+                When AI screening is connected, suspected false reports will surface here for
+                administrator follow-up.
+              </p>
+            ) : null}
+          </div>
         ) : null}
         <p className="muted">
           {labelAlertType(alert.type)}
