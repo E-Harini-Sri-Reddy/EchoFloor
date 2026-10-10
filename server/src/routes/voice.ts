@@ -16,7 +16,7 @@ import { assertN8nSafeId, newN8nRequestId } from "../util/n8nIds.js";
 
 const N8N_PENDING_FALLBACK_MS = 20_000;
 /** Hard gap between voice questions per user — protects n8n from floods. */
-const VOICE_QUESTION_RATE_LIMIT_MS = 30 * 60 * 1000;
+const VOICE_QUESTION_RATE_LIMIT_MS = 60 * 1000;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -189,12 +189,12 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
         );
         if (recent?.createdAt instanceof Date) {
           const retryAt = recent.createdAt.getTime() + VOICE_QUESTION_RATE_LIMIT_MS;
-          const waitMinutes = Math.max(1, Math.ceil((retryAt - Date.now()) / 60_000));
+          const waitSeconds = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
           response.status(429).json({
             success: false,
             error: {
               code: "RATE_LIMITED",
-              message: `Voice is limited to one request every 30 minutes. Try again in about ${waitMinutes} minute${waitMinutes === 1 ? "" : "s"}.`,
+              message: `Voice is limited to one request per minute. Try again in about ${waitSeconds} second${waitSeconds === 1 ? "" : "s"}.`,
               retryAt: new Date(retryAt).toISOString(),
             },
           });

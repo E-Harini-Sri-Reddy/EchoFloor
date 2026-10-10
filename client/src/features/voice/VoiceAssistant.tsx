@@ -39,7 +39,7 @@ import { delay, formatTimestamp } from "@/utils/format";
 
 type LivePhase = "idle" | "listening" | "hearing" | "thinking" | "speaking";
 
-const VOICE_RATE_LIMIT_MS = 30 * 60 * 1000;
+const VOICE_RATE_LIMIT_MS = 60 * 1000;
 
 const LIVE_CAPTION: Record<LivePhase, string> = {
   idle: "Tap to talk when you are ready.",
@@ -56,25 +56,25 @@ function voiceRateLimitKey(userId: string, organisationId: string) {
 function readVoiceRateLimit(userId: string, organisationId: string): {
   blocked: boolean;
   retryAt: number | null;
-  waitMinutes: number;
+  waitSeconds: number;
 } {
   try {
     const raw = sessionStorage.getItem(voiceRateLimitKey(userId, organisationId));
     const last = raw ? Number(raw) : 0;
     if (!Number.isFinite(last) || last <= 0) {
-      return { blocked: false, retryAt: null, waitMinutes: 0 };
+      return { blocked: false, retryAt: null, waitSeconds: 0 };
     }
     const retryAt = last + VOICE_RATE_LIMIT_MS;
     if (Date.now() >= retryAt) {
-      return { blocked: false, retryAt: null, waitMinutes: 0 };
+      return { blocked: false, retryAt: null, waitSeconds: 0 };
     }
     return {
       blocked: true,
       retryAt,
-      waitMinutes: Math.max(1, Math.ceil((retryAt - Date.now()) / 60_000)),
+      waitSeconds: Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)),
     };
   } catch {
-    return { blocked: false, retryAt: null, waitMinutes: 0 };
+    return { blocked: false, retryAt: null, waitSeconds: 0 };
   }
 }
 
@@ -124,7 +124,7 @@ function LiveVoiceAssistantPage({
     const limit = readVoiceRateLimit(session.userId, session.organisationId);
     if (limit.blocked) {
       setRateLimitNote(
-        `Voice is limited to one request every 30 minutes. Try again in about ${limit.waitMinutes} minute${limit.waitMinutes === 1 ? "" : "s"}.`,
+        `Voice is limited to one request per minute. Try again in about ${limit.waitSeconds} second${limit.waitSeconds === 1 ? "" : "s"}.`,
       );
     } else {
       setRateLimitNote("");
@@ -133,12 +133,12 @@ function LiveVoiceAssistantPage({
       const next = readVoiceRateLimit(session.userId, session.organisationId);
       if (next.blocked) {
         setRateLimitNote(
-          `Voice is limited to one request every 30 minutes. Try again in about ${next.waitMinutes} minute${next.waitMinutes === 1 ? "" : "s"}.`,
+          `Voice is limited to one request per minute. Try again in about ${next.waitSeconds} second${next.waitSeconds === 1 ? "" : "s"}.`,
         );
       } else {
         setRateLimitNote("");
       }
-    }, 15_000);
+    }, 1_000);
     return () => window.clearInterval(handle);
   }, [session.userId, session.organisationId]);
 
@@ -240,7 +240,7 @@ function LiveVoiceAssistantPage({
     // Count this turn against the 30-minute client gate immediately.
     markVoiceRequestSent(session.userId, session.organisationId);
     setRateLimitNote(
-      "Voice is limited to one request every 30 minutes. Try again after the cooldown.",
+      "Voice is limited to one request per minute. Try again after the cooldown.",
     );
 
     // Worker + MCH-001: resolve open overheating once; other questions go to n8n / Mongo.
@@ -288,7 +288,7 @@ function LiveVoiceAssistantPage({
     }
     const limit = readVoiceRateLimit(session.userId, session.organisationId);
     if (limit.blocked) {
-      const message = `Voice is limited to one request every 30 minutes. Try again in about ${limit.waitMinutes} minute${limit.waitMinutes === 1 ? "" : "s"}.`;
+      const message = `Voice is limited to one request per minute. Try again in about ${limit.waitSeconds} second${limit.waitSeconds === 1 ? "" : "s"}.`;
       setRateLimitNote(message);
       setFailure(message);
       return;
@@ -354,7 +354,7 @@ function LiveVoiceAssistantPage({
       </header>
       <p className="notice notice-info">
         Tap to talk, then Stop &amp; send. The mic is off unless you tap. One voice request is
-        allowed every 30 minutes so n8n is not flooded. Answers use n8n when available, otherwise
+        allowed per minute so n8n is not flooded. Answers use n8n when available, otherwise
         MongoDB vector search.
       </p>
       <p className="sr-only" aria-live="polite">
