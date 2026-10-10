@@ -88,83 +88,17 @@ function LiveVoiceAssistantPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount/unmount only
   }, []);
 
-  function buildLocalFallback(note: string): {
-    text: string;
-    evidence: VoiceEvidenceItem[];
-  } {
-    if (!machine) {
-      return {
-        text: note.trim()
-          ? `No machine selected. ${note.trim()}`
-          : "No machine selected.",
-        evidence: [],
-      };
-    }
-
-    // MVP demo fallback: only Machine 1 (MCH-001) speaks the seeded live-alert script.
-    const isMachineOne = /^mch-?001$/i.test(machine.machineCode.trim());
-    if (isMachineOne) {
-      const alerts = liveAlertsFor(db, session.organisationId, {
-        machineId: machine.id,
-      });
-      const evidence = alerts.slice(0, 4).map((alert) => ({
-        recordId: alert.id,
-        text: alert.message,
-        createdAt: alert.createdAt,
-        machineId: machine.id,
-      }));
-      const hasOverheating = alerts.some(
-        (alert) =>
-          alert.issueKind === "overheating" ||
-          /overheat/i.test(alert.title) ||
-          /overheat/i.test(alert.message),
-      );
-      const hasNeedsAttention = alerts.some(
-        (alert) =>
-          alert.issueKind === "damage" ||
-          /false damage|needs attention|admin approve/i.test(
-            `${alert.title} ${alert.message}`,
-          ),
-      );
-      const lines = [
-        `For ${machine.machineCode}, here is the current error status from Live Alerts.`,
-      ];
-      if (hasOverheating) {
-        lines.push(
-          `Critical: Overheating — do not operate until the alert window ends.`,
-        );
-      }
-      if (hasNeedsAttention) {
-        lines.push(
-          `Warning: Suspected false damage report — an administrator should approve or deny it under Needs attention.`,
-        );
-      }
-      if (alerts.length === 0) {
-        lines.push(`No open live alerts remain for this machine.`);
-      } else {
-        lines.push(
-          `Sample live holds stay visible until each expiresAt window ends.`,
-        );
-      }
-      if (note.trim()) lines.push(note.trim());
-      return { text: lines.join(" "), evidence };
-    }
-
-    const memories = memoriesForMachine(db, session.organisationId, machine.id);
-    const local = answerFromRecords(
-      `What recent history and open issues exist for ${machine.machineCode}?`,
-      machine,
-      memories,
+  function machineHasOverheatingAlert(): boolean {
+    if (!machine) return false;
+    return liveAlertsFor(db, session.organisationId, {
+      machineId: machine.id,
+    }).some(
+      (alert) =>
+        alert.issueKind === "overheating" ||
+        (alert.severity === "critical" && alert.type === "machine_hazard") ||
+        /overheat/i.test(alert.title) ||
+        /overheat/i.test(alert.message),
     );
-    return {
-      text: note.trim() ? `${local.text} ${note.trim()}` : local.text,
-      evidence: local.evidence.map((item) => ({
-        recordId: item.memoryId,
-        text: item.excerpt,
-        createdAt: item.createdAt,
-        machineId: machine.id,
-      })),
-    };
   }
 
   async function presentAnswer(text: string, items: VoiceEvidenceItem[]) {
@@ -178,10 +112,19 @@ function LiveVoiceAssistantPage({
     busyRef.current = false;
   }
 
+  async function presentVoiceFailure(message: string) {
+    setFailure(message);
+    setLivePhase("listening");
+    busyRef.current = false;
+  }
+
   async function handleWorkerOverheatingResolution() {
     if (!machine) return false;
     const isMachineOne = /^mch-?001$/i.test(machine.machineCode.trim());
-    if (role !== "worker" || !isMachineOne) return false;
+    // Only short-circuit when an overheating hold is still open; otherwise use n8n vector search.
+    if (role !== "worker" || !isMachineOne || !machineHasOverheatingAlert()) {
+      return false;
+    }
 
     const sessionIds = {
       userId: session.userId,
@@ -192,9 +135,7 @@ function LiveVoiceAssistantPage({
     if (session.live) {
       const remote = await resolveOverheatingByVoiceApi(sessionIds, machine.id);
       if (!remote.ok) {
-        setFailure(remote.message);
-        setLivePhase("listening");
-        busyRef.current = false;
+        await presentVoiceFailure(remote.message);
         return true;
       }
       message = remote.message;
@@ -207,15 +148,12 @@ function LiveVoiceAssistantPage({
     } else {
       const local = demoStore.resolveOverheatingByVoice(machine.id);
       if (!local.ok) {
-        setFailure(local.message);
-        setLivePhase("listening");
-        busyRef.current = false;
+        await presentVoiceFailure(local.message);
         return true;
       }
       message = local.data?.message ?? message;
     }
 
-    toast.push("Overheating alert removed from Live Alerts.");
     await presentAnswer(message, []);
     return true;
   }
@@ -227,7 +165,7 @@ function LiveVoiceAssistantPage({
     setCaption("");
     setFailure("");
 
-    // Worker + MCH-001 MVP: voice confirms overheating resolved and deletes that alert.
+    // Worker + MCH-001: resolve open overheating once; other questions go to n8n vector search.
     if (await handleWorkerOverheatingResolution()) {
       return;
     }
@@ -242,8 +180,9 @@ function LiveVoiceAssistantPage({
       filename: blobFilename(blob),
     });
     if (!posted.ok) {
-      const fallback = buildLocalFallback("");
-      await presentAnswer(fallback.text, fallback.evidence);
+      await presentVoiceFailure(
+        posted.message || "Voice search is unavailable. Try again in a moment.",
+      );
       return;
     }
     if (!posted.pending) {
@@ -258,8 +197,9 @@ function LiveVoiceAssistantPage({
       await presentAnswer(result.data.answer, result.data.evidence);
       return;
     }
-    const fallback = buildLocalFallback("");
-    await presentAnswer(fallback.text, fallback.evidence);
+    await presentVoiceFailure(
+      result.message || "No answer yet from vector search. Please try again.",
+    );
   }
 
   async function startConversation() {
@@ -330,8 +270,8 @@ function LiveVoiceAssistantPage({
         <StatusBadge status="info" label={LIVE_CAPTION[livePhase]} />
       </header>
       <p className="notice notice-info">
-        Speak and pause, or tap Hold to talk then Stop Listening to send. If n8n is slow
-        (&gt;30s), EchoFloor shows matching workspace records so you still get an answer.
+        Speak and pause, or tap Hold to talk then Stop Listening to send. Answers come from
+        n8n vector search over machine memories.
       </p>
       <p className="sr-only" aria-live="polite">
         {LIVE_CAPTION[livePhase]}
