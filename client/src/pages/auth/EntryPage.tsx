@@ -146,24 +146,20 @@ export function EntryPage() {
         </p>
       </section>
       <main className="auth-main">
-        <div className="notice">
-          <strong>Development-only entry.</strong>
+        <div className="auth-dev-bar">
+          <strong>Dev entry</strong>
           <p>
-            Northstar Manufacturing example password:{" "}
-            <span className="mono">{DEMO_PASSWORD}</span>. Invited workers use the
-            temporary password set by an administrator.
-            {googleConfigured
-              ? " Google uses the official Google button; the API verifies the ID token, then the session is linked by email to the same user id."
-              : " Google sign-in stays unavailable until VITE_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID are set."}
+            Password <span className="mono">{DEMO_PASSWORD}</span>
+            {googleConfigured ? " · Google ID tokens verified by API" : " · Google unset"}
           </p>
-          <div className="row" style={{ marginTop: 12 }}>
+          <div className="auth-dev-actions">
             {DEMO_ACCOUNTS.map((account) => (
               <Button
                 key={account.email}
                 variant="secondary"
                 onClick={() => enter(account.email)}
               >
-                Preview as {account.roleLabel}: {account.name}
+                {account.roleLabel}: {account.name.split(" ")[0]}
               </Button>
             ))}
             <Button
@@ -173,7 +169,7 @@ export function EntryPage() {
                 toast.push("Example records were reset in this browser session.");
               }}
             >
-              Reset example data
+              Reset
             </Button>
           </div>
         </div>
@@ -361,7 +357,7 @@ export function EntryPage() {
           )}
         </div>
 
-        <p className="muted">
+        <p className="muted auth-main-foot">
           Session records in this tab: {db.organisations.length} organisations.{" "}
           <Link to="/access-denied">Preview the access-denied state</Link>.
         </p>

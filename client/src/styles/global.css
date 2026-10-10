@@ -904,7 +904,7 @@ p {
 .auth-screen {
   min-height: 100dvh;
   display: grid;
-  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
 }
 
 .auth-panel {
@@ -918,9 +918,10 @@ p {
 }
 
 .auth-main {
-  padding: var(--space-8) var(--space-6);
+  padding: var(--space-5) var(--space-6) var(--space-8);
   display: grid;
-  gap: var(--space-5);
+  gap: var(--space-4);
+  justify-items: center;
   align-content: start;
 }
 
@@ -935,6 +936,51 @@ p {
   width: 100%;
   display: grid;
   gap: var(--space-4);
+}
+
+.auth-dev-bar {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  background: #fff8ea;
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-control);
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.auth-dev-bar strong {
+  font-size: 0.85rem;
+}
+
+.auth-dev-bar p {
+  margin: 0;
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.auth-dev-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.auth-dev-actions .btn {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+
+.auth-main-foot {
+  text-align: center;
+  max-width: 440px;
 }
 
 .auth-tabs {
