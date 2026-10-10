@@ -549,11 +549,21 @@ describe("auth providers", () => {
     expect(withGoogle.ok).toBe(true);
   });
 
-  it("tells unmatched Google emails to use the invited address or ask an administrator", () => {
-    const result = loginWithGoogle(createSeed(), "someone.else@gmail.com");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.fieldErrors?.email).toMatch(/administrator|temporary password/i);
+  it("tells unknown emails to register an organisation or contact an administrator", () => {
+    const byGoogle = loginWithGoogle(createSeed(), "someone.else@gmail.com");
+    expect(byGoogle.ok).toBe(false);
+    if (!byGoogle.ok) {
+      expect(byGoogle.fieldErrors?.email).toMatch(/Register|administrator/i);
+    }
+
+    const byPassword = loginWithPassword(
+      createSeed(),
+      "unknown@example.com",
+      "Password-123!",
+    );
+    expect(byPassword.ok).toBe(false);
+    if (!byPassword.ok) {
+      expect(byPassword.fieldErrors?.email).toMatch(/Register|administrator/i);
     }
   });
 });

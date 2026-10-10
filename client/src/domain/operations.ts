@@ -276,6 +276,9 @@ export function loginAsEmail(
   return establishSession(db, user.id);
 }
 
+const NO_ACCOUNT_SIGN_IN_MESSAGE =
+  "No EchoFloor account was found for this email. If you represent an organisation, use Register to create one. If you are a worker, contact your organisation administrator for sign-in access.";
+
 export function loginWithPassword(
   db: DemoDatabase,
   email: string,
@@ -283,9 +286,14 @@ export function loginWithPassword(
 ): OperationResult<{ session: Session }> {
   const normalized = normalizeEmail(email);
   const user = db.users.find((candidate) => candidate.emailNormalized === normalized);
-  if (!user || user.status !== "active") {
-    return fail("VALIDATION", "Email or password is incorrect.", {
-      password: "Email or password is incorrect.",
+  if (!user) {
+    return fail("NOT_FOUND", NO_ACCOUNT_SIGN_IN_MESSAGE, {
+      email: NO_ACCOUNT_SIGN_IN_MESSAGE,
+    });
+  }
+  if (user.status !== "active") {
+    return fail("FORBIDDEN", "This account is disabled.", {
+      email: "This account is disabled. Contact your organisation administrator.",
     });
   }
 
@@ -336,15 +344,15 @@ export function loginWithGoogle(
     });
   }
   const user = db.users.find((candidate) => candidate.emailNormalized === normalized);
-  if (!user || user.status !== "active") {
-    return fail(
-      "NOT_FOUND",
-      "No EchoFloor account is linked to this Google email.",
-      {
-        email:
-          "No EchoFloor account is linked to this Google email. If you were invited under a different address, sign in with that email and the temporary password from your administrator, or ask them to confirm the correct sign-in method.",
-      },
-    );
+  if (!user) {
+    return fail("NOT_FOUND", NO_ACCOUNT_SIGN_IN_MESSAGE, {
+      email: NO_ACCOUNT_SIGN_IN_MESSAGE,
+    });
+  }
+  if (user.status !== "active") {
+    return fail("FORBIDDEN", "This account is disabled.", {
+      email: "This account is disabled. Contact your organisation administrator.",
+    });
   }
   const linked = {
     ...db,
