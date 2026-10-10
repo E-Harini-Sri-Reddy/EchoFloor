@@ -43,7 +43,8 @@ export async function createApp(config: AppConfig) {
 
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "1mb" }));
+  // Issue reports may include a ~1.5MB photo as a data URL (~2MB JSON).
+  app.use(express.json({ limit: "4mb" }));
   app.use(
     cors({
       origin: corsOrigins(config),

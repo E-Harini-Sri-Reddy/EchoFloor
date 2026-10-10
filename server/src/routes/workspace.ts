@@ -10,6 +10,51 @@ import {
   sessionFromDocs,
   toId,
 } from "../db/workspace.js";
+import { buildSearchableText } from "../services/buildSearchableText.js";
+import { triggerMemoryEmbedding } from "../services/memoryEmbedding.js";
+
+const MAX_ISSUE_PHOTO_BYTES = 1_500_000;
+const ISSUE_KINDS = [
+  "breakdown",
+  "damage",
+  "maintenance",
+  "overheating",
+  "unsafe",
+] as const;
+type IssueKind = (typeof ISSUE_KINDS)[number];
+
+function alertTypeForIssue(kind: IssueKind): string {
+  switch (kind) {
+    case "breakdown":
+      return "machine_breakdown";
+    case "damage":
+      return "machine_damage";
+    case "maintenance":
+      return "machine_maintenance";
+    case "overheating":
+    case "unsafe":
+      return "machine_hazard";
+  }
+}
+
+function severityForIssue(kind: IssueKind): "warning" | "critical" {
+  return kind === "maintenance" ? "warning" : "critical";
+}
+
+function labelIssueKind(kind: IssueKind): string {
+  switch (kind) {
+    case "breakdown":
+      return "Breakdown / not functioning";
+    case "damage":
+      return "Damage";
+    case "maintenance":
+      return "Maintenance — do not operate";
+    case "overheating":
+      return "Overheating";
+    case "unsafe":
+      return "Unsafe to use";
+  }
+}
 
 const SEED_PASSWORD = process.env.DEMO_SEED_PASSWORD?.trim() || "AdminTest-1";
 
@@ -1021,6 +1066,238 @@ export function registerWorkspaceRoutes(app: Express, config: AppConfig) {
           data: {
             machineId: toId(machineId),
             workspace: packed?.workspace ?? null,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  app.post(
+    `${prefix}/issues`,
+    async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        const db = getDb();
+        if (!db) return unavailable(response);
+
+        const organisationId = asObjectId(String(request.body?.organisationId ?? ""));
+        const reportedBy = asObjectId(String(request.body?.reportedBy ?? ""));
+        const machineId = asObjectId(String(request.body?.machineId ?? ""));
+        const issueKindRaw = String(request.body?.issueKind ?? "").trim() as IssueKind;
+        const title = String(request.body?.title ?? "").trim();
+        const description = String(request.body?.description ?? "").trim();
+        const expiresAtRaw = String(request.body?.expiresAt ?? "").trim();
+        const photoDataUrl = String(request.body?.photoDataUrl ?? "").trim();
+        const photoName = String(request.body?.photoName ?? "").trim();
+        const photoBytes = Number(request.body?.photoBytes ?? 0);
+        const photoSourceRaw = String(request.body?.photoSource ?? "").trim();
+        const photoSource =
+          photoSourceRaw === "camera" || photoSourceRaw === "upload"
+            ? photoSourceRaw
+            : "";
+
+        const fieldErrors: Record<string, string> = {};
+        if (!organisationId || !reportedBy) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "organisationId and reportedBy are required.",
+            },
+          });
+          return;
+        }
+        if (!machineId) fieldErrors.machineId = "Choose a machine in this organisation.";
+        if (!ISSUE_KINDS.includes(issueKindRaw)) {
+          fieldErrors.issueKind = "Choose what kind of issue this is.";
+        }
+        if (title.length < 3) fieldErrors.title = "Enter a short title for the issue.";
+        if (description.length < 8) {
+          fieldErrors.description = "Describe the issue in at least 8 characters.";
+        }
+        const expires = new Date(expiresAtRaw);
+        if (Number.isNaN(expires.getTime()) || expires.getTime() <= Date.now()) {
+          fieldErrors.expiresAt = "Choose an end time in the future for this alert.";
+        }
+        if (!photoDataUrl.startsWith("data:image/")) {
+          fieldErrors.photo =
+            "Take a photo with the camera or upload an image of the issue.";
+        } else if (!Number.isFinite(photoBytes) || photoBytes > MAX_ISSUE_PHOTO_BYTES) {
+          fieldErrors.photo = "Use a photo smaller than about 1.5 MB.";
+        }
+        if (!photoSource) {
+          fieldErrors.photo =
+            "Take a photo with the camera or upload an image of the issue.";
+        }
+        if (Object.keys(fieldErrors).length > 0) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "Check the issue report.",
+              fieldErrors,
+            },
+          });
+          return;
+        }
+        if (!machineId || !ISSUE_KINDS.includes(issueKindRaw)) {
+          response.status(400).json({
+            success: false,
+            error: { code: "VALIDATION", message: "Check the issue report." },
+          });
+          return;
+        }
+        const issueKind = issueKindRaw;
+
+        const membership = await db.collection("memberships").findOne({
+          userId: reportedBy,
+          organisationId,
+          status: { $in: ["active", "suspended"] },
+        });
+        if (!membership || membership.status === "suspended") {
+          response.status(403).json({
+            success: false,
+            error: {
+              code: "FORBIDDEN",
+              message: "You cannot report issues for this organisation.",
+            },
+          });
+          return;
+        }
+
+        const machine = await db.collection("machines").findOne({
+          _id: machineId,
+          organisationId,
+        });
+        if (!machine) {
+          response.status(404).json({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Machine not found." },
+          });
+          return;
+        }
+
+        const user = await db.collection("users").findOne({ _id: reportedBy });
+        const reporterName = String(user?.displayName ?? "Worker");
+        const machineCode = String(machine.machineCode ?? "machine");
+        const machineName = String(machine.name ?? machineCode);
+        const kindLabel = labelIssueKind(issueKind);
+        const alertType = alertTypeForIssue(issueKind);
+        const severity = severityForIssue(issueKind);
+        const doNotOperate = true;
+        const now = new Date();
+        const memoryId = new ObjectId();
+        const alertId = new ObjectId();
+        const orgString = toId(organisationId);
+        const machineString = toId(machineId);
+        const content = `${description}\n\nIssue kind: ${kindLabel}. Alert window until ${expires.toISOString()}. A photo was ${
+          photoSource === "camera" ? "taken with the camera" : "uploaded"
+        } and queued for AI false-report screening.`;
+        const memoryBase = {
+          _id: memoryId,
+          organisationId,
+          machineId,
+          organisationIdString: orgString,
+          machineIdString: machineString,
+          type: issueKind === "maintenance" ? "maintenance" : "incident",
+          title,
+          content,
+          summary: description.slice(0, 140),
+          status: "unresolved",
+          source: { type: "text", submittedBy: reportedBy },
+          tags: ["issue-report", issueKind, `photo-${photoSource}`],
+          currentRevision: 1,
+          example: false,
+          contentVersion: 1,
+          embeddingStatus: "pending",
+          createdBy: reportedBy,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const memoryDoc = {
+          ...memoryBase,
+          text: buildSearchableText(memoryBase, { machineName }),
+        };
+
+        const photoAiReview = {
+          status: "needs_admin_review",
+          note: "Photo queued for AI false-report screening. An administrator should review the photo and decide whether the report looks false.",
+          updatedAt: now.toISOString(),
+        };
+
+        const alertDoc = {
+          _id: alertId,
+          organisationId,
+          machineId,
+          type: alertType,
+          severity,
+          title: doNotOperate
+            ? `${machineCode}: ${title} — do not operate until window ends`
+            : `${machineCode}: ${title}`,
+          message: doNotOperate
+            ? `${machineCode} (${machineName}) — ${kindLabel}. ${description} No personnel should operate this machine until ${expires.toISOString()}. Reported by ${reporterName}. Photo awaiting admin review for possible false reporting.`
+            : `${machineCode} (${machineName}) — ${kindLabel}. ${description} Reported by ${reporterName}. Photo awaiting admin review for possible false reporting.`,
+          status: "open",
+          sourceType: "issue_report",
+          sourceId: memoryId,
+          expiresAt: expires,
+          photoDataUrl,
+          photoName:
+            photoName ||
+            (photoSource === "camera" ? "camera-capture.jpg" : "issue-photo.jpg"),
+          photoSource,
+          photoAiReview,
+          issueKind,
+          reportedBy,
+          read: false,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        await db.collection("memories").insertOne(memoryDoc);
+        await db.collection("alerts").insertOne(alertDoc);
+        await db.collection("memory_revisions").insertOne({
+          _id: new ObjectId(),
+          organisationId,
+          memoryId,
+          revisionNumber: 1,
+          snapshot: {
+            type: memoryDoc.type,
+            title: memoryDoc.title,
+            content: memoryDoc.content,
+            summary: memoryDoc.summary,
+            status: memoryDoc.status,
+            tags: memoryDoc.tags,
+          },
+          changeSummary: "Issue report created",
+          changedBy: reportedBy,
+          createdAt: now,
+        });
+
+        if (issueKind === "maintenance" || issueKind === "breakdown") {
+          await db.collection("machines").updateOne(
+            { _id: machineId },
+            { $set: { status: "maintenance", updatedAt: now } },
+          );
+        }
+
+        triggerMemoryEmbedding(
+          config,
+          toId(memoryId),
+          orgString,
+          1,
+          String(memoryDoc.text ?? content),
+        );
+
+        const packed = await workspaceForUser(reportedBy);
+        response.status(201).json({
+          success: true,
+          data: {
+            alertId: toId(alertId),
+            memoryId: toId(memoryId),
+            workspace: packed?.workspace ?? null,
+            session: packed?.session ?? null,
           },
         });
       } catch (error) {

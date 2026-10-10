@@ -25,7 +25,15 @@ const NETWORK_ERROR: AuthFail = {
 async function parseJson(response: Response) {
   return (await response.json()) as {
     success: boolean;
-    data?: AuthWorkspacePayload | { workspace: DemoDatabase | null; machineId?: string };
+    data?:
+      | AuthWorkspacePayload
+      | {
+          workspace: DemoDatabase | null;
+          machineId?: string;
+          alertId?: string;
+          memoryId?: string;
+          session?: Session;
+        };
     error?: { code?: string; message?: string; fieldErrors?: Record<string, string> };
   };
 }
@@ -253,5 +261,56 @@ export async function apiUpdateMachine(
     return body.data.workspace;
   } catch {
     return null;
+  }
+}
+
+export async function apiReportMachineIssue(input: {
+  organisationId: string;
+  reportedBy: string;
+  machineId: string;
+  issueKind: string;
+  title: string;
+  description: string;
+  expiresAt: string;
+  photoDataUrl: string;
+  photoName: string;
+  photoBytes: number;
+  photoSource: "camera" | "upload";
+}): Promise<{ ok: true; data: AuthWorkspacePayload } | AuthFail> {
+  const { apiBaseUrl } = getClientConfig();
+  try {
+    const response = await fetch(`${apiBaseUrl}/issues`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await parseJson(response);
+    if (
+      !response.ok ||
+      !body.success ||
+      !body.data ||
+      !("workspace" in body.data) ||
+      !body.data.workspace
+    ) {
+      return {
+        ok: false,
+        message: body.error?.message ?? "Could not save the issue to the database.",
+        fieldErrors: body.error?.fieldErrors,
+      };
+    }
+    const workspace = body.data.workspace;
+    const session =
+      "session" in body.data && body.data.session
+        ? (body.data.session as Session)
+        : null;
+    if (!session) {
+      return {
+        ok: false,
+        message: "Issue saved but the workspace session could not be refreshed.",
+      };
+    }
+    return { ok: true, data: { workspace, session } };
+  } catch {
+    return NETWORK_ERROR;
   }
 }

@@ -13,6 +13,7 @@ import {
 } from "@/features/alerts/IssuePhotoCapture";
 import { machinesFor } from "@/domain/queries";
 import { useDemoDatabase } from "@/hooks/useDemo";
+import { apiReportMachineIssue } from "@/services/apiClient";
 import { demoStore } from "@/services/demoStore";
 import type { MachineIssueKind } from "@/types/domain";
 
@@ -43,6 +44,7 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   if (!session) return null;
+  const activeSession = session;
 
   const alertsPath =
     role === "admin" ? "/admin/issues/alerts" : "/worker/issues/alerts";
@@ -50,6 +52,7 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
+    setErrors({});
     const preset = issueDurationPresets().find((item) => item.id === durationId);
     let expiresAt = "";
     if (durationId === "custom") {
@@ -57,8 +60,8 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
     } else if (preset) {
       expiresAt = new Date(Date.now() + preset.hours * 60 * 60 * 1000).toISOString();
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 250));
-    const result = demoStore.reportMachineIssue({
+
+    const payload = {
       machineId,
       issueKind,
       title,
@@ -67,8 +70,31 @@ export function ReportIssuePage({ role }: { role: "admin" | "worker" }) {
       photoDataUrl: photo?.dataUrl ?? "",
       photoName: photo?.name ?? "",
       photoBytes: photo?.bytes ?? 0,
-      photoSource: photo?.source ?? "upload",
-    });
+      photoSource: (photo?.source ?? "upload") as "camera" | "upload",
+    };
+
+    if (activeSession.live) {
+      const remote = await apiReportMachineIssue({
+        organisationId: activeSession.organisationId,
+        reportedBy: activeSession.userId,
+        ...payload,
+      });
+      setSaving(false);
+      if (!remote.ok) {
+        setErrors(remote.fieldErrors ?? {});
+        toast.push(remote.message);
+        return;
+      }
+      demoStore.hydrateLive(remote.data.workspace, remote.data.session);
+      toast.push(
+        "Issue reported and saved to the database. The photo is queued for admin review.",
+      );
+      navigate(alertsPath);
+      return;
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    const result = demoStore.reportMachineIssue(payload);
     setSaving(false);
     if (!result.ok) {
       setErrors(result.fieldErrors ?? {});
