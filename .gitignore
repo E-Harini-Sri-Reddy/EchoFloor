@@ -1,0 +1,94 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime files
+pids/
+*.pid
+*.pid.lock
+
+# Testing
+coverage/
+playwright-report/
+test-results/
+
+# Frontend tooling
+.vite/
+*.local
+
+# Backend uploads and temporary files
+uploads/
+tmp/
+temp/
+*.tmp
+
+# Local databases and database backups
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.bson
+*.archive
+
+# AI / ML artifacts
+*.pt
+*.pth
+*.onnx
+*.safetensors
+embeddings-cache/
+
+# n8n local data
+.n8n/
+n8n-data/
+
+# IDEs and editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Package manager / tool caches
+.npm/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+
+# Deployment and local overrides
+.vercel/
+.netlify/
+.turbo/
+
+# Generated documentation and reports
+*.generated.md
+*.generated.json
+
+docs

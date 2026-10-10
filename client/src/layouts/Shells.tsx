@@ -1,0 +1,362 @@
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  homePathForSession,
+  isTemporaryWorker,
+  membershipAccessState,
+  membershipAllowsLogin,
+} from "@/domain/access";
+import { labelSessionRole } from "@/domain/labels";
+import { countOpenAlerts, liveAlertsFor } from "@/domain/queries";
+import { useDemoDatabase } from "@/hooks/useDemo";
+import { demoStore } from "@/services/demoStore";
+import { getClientConfig } from "@/services/clientConfig";
+import { ErrorState, LoadingState } from "@/components/ui/States";
+
+interface NavItem {
+  to: string;
+  label: string;
+  short: string;
+  end?: boolean;
+}
+
+const adminNav: NavItem[] = [
+  { to: "/admin", label: "Overview", short: "Overview", end: true },
+  { to: "/admin/machines", label: "Machine Details", short: "Machines" },
+  { to: "/admin/tasks", label: "Tasks", short: "Tasks" },
+  { to: "/admin/voice", label: "Voice Assistant", short: "Voice" },
+  { to: "/admin/memories", label: "Memory Explorer", short: "Memory" },
+  { to: "/admin/handover", label: "Shifts & Handover", short: "Shifts" },
+  { to: "/admin/alerts", label: "Live Alerts", short: "Alerts" },
+  { to: "/admin/settings", label: "Settings", short: "Settings" },
+];
+
+const permanentWorkerNav: NavItem[] = [
+  { to: "/worker", label: "Worker Dashboard", short: "Home", end: true },
+  { to: "/worker/machines", label: "Machine Details", short: "Machines" },
+  { to: "/worker/tasks", label: "My Tasks", short: "Tasks" },
+  { to: "/worker/voice", label: "Voice Assistant", short: "Voice" },
+  { to: "/worker/alerts", label: "Live Alerts", short: "Alerts" },
+  { to: "/worker/shift", label: "My Shift", short: "My Shift" },
+  { to: "/worker/settings", label: "Settings", short: "Settings" },
+];
+
+const temporaryWorkerNav: NavItem[] = [
+  { to: "/worker/voice", label: "Voice", short: "Voice" },
+  { to: "/worker/alerts", label: "Live Alerts", short: "Alerts" },
+  { to: "/worker/tasks", label: "Tasks", short: "Tasks" },
+  { to: "/worker/history", label: "History", short: "History" },
+  { to: "/worker/settings", label: "Settings", short: "Settings" },
+];
+
+const adminMobile = ["Overview", "Machines", "Tasks", "Alerts"];
+const permanentWorkerMobile = ["Home", "Tasks", "Voice", "Alerts", "My Shift"];
+const temporaryWorkerMobile = ["Voice", "Alerts", "History"];
+
+export function AdminShell() {
+  return <Shell items={adminNav} mobileLabels={adminMobile} home="/admin" />;
+}
+
+export function WorkerShell() {
+  const session = useDemoDatabase().session;
+  const temporary = isTemporaryWorker(session);
+  return (
+    <Shell
+      items={temporary ? temporaryWorkerNav : permanentWorkerNav}
+      mobileLabels={temporary ? temporaryWorkerMobile : permanentWorkerMobile}
+      home={temporary ? "/worker/voice" : "/worker"}
+    />
+  );
+}
+
+function Shell({
+  items,
+  mobileLabels,
+  home,
+}: {
+  items: NavItem[];
+  mobileLabels: string[];
+  home: string;
+}) {
+  const db = useDemoDatabase();
+  const session = db.session;
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!session) {
+      navigate("/", { replace: true });
+      return;
+    }
+    const membership = db.memberships.find(
+      (item) =>
+        item.userId === session.userId && item.organisationId === session.organisationId,
+    );
+    if (membership && !membershipAllowsLogin(membership)) {
+      demoStore.logout();
+      navigate("/", { replace: true });
+    }
+  }, [session, navigate, db.memberships]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setStatus(db.flags.forceLoadError ? "error" : "ready");
+    }, 280);
+    return () => window.clearTimeout(handle);
+  }, [attempt, db.flags.forceLoadError, session?.organisationId]);
+
+  useEffect(() => {
+    setMenuOpen(false);
+    setMoreOpen(false);
+  }, [location.pathname]);
+
+  if (!session) return null;
+
+  if (getClientConfig().dataSource === "api") {
+    return (
+      <ErrorState
+        title="Operational API is not connected"
+        message="VITE_DATA_SOURCE is set to api, but this server does not serve organisation data yet. Set it back to mock to review the labeled demonstration interface. Nothing here is being presented as live factory data."
+      />
+    );
+  }
+
+  const organisation = db.organisations.find(
+    (item) => item.id === session.organisationId,
+  );
+  const openAlerts = countOpenAlerts(
+    liveAlertsFor(db, session.organisationId, {
+      audienceUserId: session.role === "worker" ? session.userId : undefined,
+    }),
+  );
+  const membership = db.memberships.find(
+    (item) =>
+      item.userId === session.userId && item.organisationId === session.organisationId,
+  );
+  const accessState = membership ? membershipAccessState(membership) : "active";
+  const mobileItems = items.filter((item) => mobileLabels.includes(item.short));
+  const overflowItems = items.filter(
+    (item) => !mobileLabels.includes(item.short) && item.short !== "Settings",
+  );
+  const current = items.find((item) =>
+    item.end ? location.pathname === item.to : location.pathname.startsWith(item.to),
+  );
+
+  return (
+    <div className="app-shell">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            EF
+          </span>
+          <div>
+            <strong>EchoFloor</strong>
+            <span>Operational memory</span>
+          </div>
+        </div>
+        <nav aria-label="Primary">
+          <ul className="nav-list">
+            {items.map((item) => (
+              <li key={item.to}>
+                <NavLink to={item.to} end={item.end} className="nav-link">
+                  {item.label}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="sidebar-foot">
+          <strong>{session.displayName}</strong>
+          <div>{labelSessionRole(session)}</div>
+          {session.workerAccessType === "temporary" && session.accessExpiresAt ? (
+            <p>Access ends {new Date(session.accessExpiresAt).toLocaleString()}</p>
+          ) : null}
+          <p>Browser-session fixtures. Not a live plant connection.</p>
+        </div>
+      </aside>
+      <div className="shell-main">
+        <header className="topbar">
+          <div className="topbar-title">
+            <h1>{current?.label ?? "EchoFloor"}</h1>
+            <p className="muted">
+              {organisation?.name}
+              {accessState === "suspended" ? " · Suspended" : ""}
+            </p>
+          </div>
+          <div className="topbar-actions">
+            {overflowItems.length > 0 ? (
+              <button
+                type="button"
+                className="btn btn-secondary menu-toggle"
+                onClick={() => setMoreOpen(true)}
+              >
+                More
+              </button>
+            ) : null}
+            <NavLink
+              className="icon-button"
+              to={session.role === "admin" ? "/admin/alerts" : "/worker/alerts"}
+              aria-label={`${openAlerts} active live alerts`}
+            >
+              <span aria-hidden="true">!</span>
+              {openAlerts > 0 ? <span className="alert-count">{openAlerts}</span> : null}
+            </NavLink>
+            <div className="profile">
+              <button
+                type="button"
+                className="icon-button"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                aria-label="Account menu"
+                onClick={() => setMenuOpen((open) => !open)}
+              >
+                {session.displayName.slice(0, 1)}
+              </button>
+              {menuOpen ? (
+                <div className="profile-menu" role="menu">
+                  <div style={{ padding: "8px 12px" }}>
+                    <strong>{session.displayName}</strong>
+                    <div className="muted">{session.email}</div>
+                    <div className="row" style={{ marginTop: 8 }}>
+                      <span className="role-chip">{labelSessionRole(session)}</span>
+                      <span className="org-chip">{organisation?.name}</span>
+                    </div>
+                  </div>
+                  <NavLink
+                    className="menu-item"
+                    role="menuitem"
+                    to={session.role === "admin" ? "/admin/settings" : "/worker/settings"}
+                  >
+                    Settings
+                  </NavLink>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      const nextRole = session.role === "admin" ? "worker" : "admin";
+                      const result = demoStore.previewRole(
+                        nextRole,
+                        nextRole === "worker" ? "permanent" : undefined,
+                      );
+                      if (!result.ok) return;
+                      window.location.assign(homePathForSession(result.db.session!));
+                    }}
+                  >
+                    Development only — preview{" "}
+                    {session.role === "admin" ? "permanent worker" : "administrator"}
+                  </button>
+                  {session.role === "admin" ? (
+                    <button
+                      type="button"
+                      className="menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        const result = demoStore.previewRole("worker", "temporary");
+                        if (!result.ok || !result.db.session) return;
+                        window.location.assign(homePathForSession(result.db.session));
+                      }}
+                    >
+                      Development only — preview temporary worker
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => demoStore.setForceLoadError(!db.flags.forceLoadError)}
+                  >
+                    {db.flags.forceLoadError
+                      ? "Development only — clear simulated failure"
+                      : "Development only — simulate a failed load"}
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      demoStore.logout();
+                      navigate("/");
+                    }}
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </header>
+        <main id="main">
+          {status === "loading" ? <LoadingState /> : null}
+          {status === "error" ? (
+            <ErrorState
+              title="Records could not be loaded"
+              message="A development control is simulating a failed request. Example records were not shown in place of the failure."
+              onRetry={() => {
+                demoStore.setForceLoadError(false);
+                setStatus("loading");
+                setAttempt((value) => value + 1);
+              }}
+            />
+          ) : null}
+          {status === "ready" ? <Outlet /> : null}
+        </main>
+        <nav className="bottom-nav" aria-label="Mobile">
+          {mobileItems.map((item) => (
+            <NavLink key={item.to} to={item.to} end={item.end} className="bottom-link">
+              {item.short}
+            </NavLink>
+          ))}
+          {overflowItems.length > 0 ? (
+            <button
+              type="button"
+              className="bottom-link"
+              onClick={() => setMoreOpen(true)}
+            >
+              More
+            </button>
+          ) : null}
+        </nav>
+        {moreOpen ? (
+          <>
+            <div className="sheet-backdrop" onClick={() => setMoreOpen(false)} />
+            <div
+              className="sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="More destinations"
+            >
+              <div className="stack">
+                {overflowItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className="nav-link"
+                    onClick={() => setMoreOpen(false)}
+                  >
+                    {item.label}
+                  </NavLink>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setMoreOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
+      </div>
+      <span className="sr-only">{home}</span>
+    </div>
+  );
+}
