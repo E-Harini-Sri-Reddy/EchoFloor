@@ -264,6 +264,52 @@ export async function apiUpdateMachine(
   }
 }
 
+export async function apiCreateDailyWorkLog(input: {
+  organisationId: string;
+  submittedBy: string;
+  machineId: string;
+  title: string;
+  content: string;
+  workDate?: string;
+}): Promise<{ ok: true; data: AuthWorkspacePayload } | AuthFail> {
+  const { apiBaseUrl } = getClientConfig();
+  try {
+    const response = await fetch(`${apiBaseUrl}/work-logs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await parseJson(response);
+    if (
+      !response.ok ||
+      !body.success ||
+      !body.data ||
+      !("workspace" in body.data) ||
+      !body.data.workspace
+    ) {
+      return {
+        ok: false,
+        message: body.error?.message ?? "Could not save the work log to the database.",
+        fieldErrors: body.error?.fieldErrors,
+      };
+    }
+    const workspace = body.data.workspace;
+    const session =
+      "session" in body.data && body.data.session
+        ? (body.data.session as Session)
+        : null;
+    if (!session) {
+      return {
+        ok: false,
+        message: "Work log saved but the workspace session could not be refreshed.",
+      };
+    }
+    return { ok: true, data: { workspace, session } };
+  } catch {
+    return NETWORK_ERROR;
+  }
+}
+
 export async function apiReportMachineIssue(input: {
   organisationId: string;
   reportedBy: string;

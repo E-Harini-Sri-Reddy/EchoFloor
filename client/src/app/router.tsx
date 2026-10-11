@@ -33,6 +33,7 @@ import {
   DamageRepairListPage,
 } from "@/features/temporary/TemporaryWorkerViews";
 import { VoiceAssistantPage } from "@/features/voice/VoiceAssistant";
+import { AddWorkLogPage } from "@/features/worklog/AddWorkLogPage";
 import type { MembershipRole } from "@/types/domain";
 import type { ReactNode } from "react";
 
@@ -141,6 +142,7 @@ export function AppRouter() {
           path="alerts/report"
           element={<Navigate to="/worker/issues/report" replace />}
         />
+        <Route path="work-log" element={<AddWorkLogPage />} />
         <Route path="tasks" element={<WorkerTasksPage />} />
         <Route path="history" element={<DamageRepairListPage />} />
         <Route path="history/:memoryId" element={<DamageRepairDetailPage />} />

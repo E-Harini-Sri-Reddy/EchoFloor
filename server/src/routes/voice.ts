@@ -5,7 +5,10 @@ import type { AppConfig } from "../config/env.js";
 import { asObjectId, toId } from "../db/ids.js";
 import { getDb } from "../db/mongo.js";
 import { requireLiveSession } from "../middleware/requireLiveSession.js";
-import { answerMachineFromMongo } from "../services/machineVoiceFallback.js";
+import {
+  answerMachineFromMongo,
+  scanMachineById,
+} from "../services/machineVoiceFallback.js";
 import { N8nClientError, isN8nConfigured, postMultipart } from "../services/n8nClient.js";
 import {
   createWorkflowRequest,
@@ -97,34 +100,79 @@ async function respondWithMongoFallback(
   },
   response: Response,
 ) {
-  const fallback = await answerMachineFromMongo(db, config, {
-    organisationId: input.organisationId,
-    machineId: input.machineId,
-  });
-  // Allow pending or previously-failed requests to complete with Mongo results.
-  await db.collection("workflow_requests").updateOne(
-    { requestId: input.requestId },
-    {
-      $set: {
-        status: "completed",
-        result: {
-          answer: fallback.answer,
-          evidenceRecordIds: fallback.evidenceRecordIds,
-          source: fallback.source,
+  try {
+    const fallback = await answerMachineFromMongo(db, config, {
+      organisationId: input.organisationId,
+      machineId: input.machineId,
+    });
+    try {
+      await db.collection("workflow_requests").updateOne(
+        { requestId: input.requestId },
+        {
+          $set: {
+            status: "completed",
+            result: {
+              answer: fallback.answer,
+              evidenceRecordIds: fallback.evidenceRecordIds,
+              source: fallback.source,
+            },
+            completedAt: new Date(),
+          },
+          $unset: { errorMessage: "" },
         },
-        completedAt: new Date(),
+      );
+    } catch (error) {
+      console.warn(
+        `workflow_requests update after Mongo fallback failed: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+    response.json({
+      success: true,
+      data: {
+        requestId: input.requestId,
+        answer: fallback.answer,
+        evidence: fallback.evidence,
       },
-      $unset: { errorMessage: "" },
-    },
-  );
-  response.json({
-    success: true,
-    data: {
-      requestId: input.requestId,
-      answer: fallback.answer,
-      evidence: fallback.evidence,
-    },
-  });
+    });
+  } catch (error) {
+    // Never 500 the client for retrieval issues — hard find({ machineId }).
+    console.error(
+      `respondWithMongoFallback failed: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
+    try {
+      const scan = await scanMachineById(db, input.organisationId, input.machineId);
+      const machineCode = String(scan.machine?.machineCode ?? "machine");
+      const titles = [
+        ...scan.alerts.map((row) => String(row.title ?? "Alert")),
+        ...scan.memories.map((row) => String(row.title ?? "Memory")),
+        ...scan.records.map((row) => String(row.title ?? "Record")),
+      ].slice(0, 8);
+      response.json({
+        success: true,
+        data: {
+          requestId: input.requestId,
+          answer:
+            titles.length > 0
+              ? `For ${machineCode}, direct find by machine id returned: ${titles.join("; ")}.`
+              : `For ${machineCode}, direct find by machine id returned no documents.`,
+          evidence: [],
+        },
+      });
+    } catch {
+      response.json({
+        success: true,
+        data: {
+          requestId: input.requestId,
+          answer: "Could not retrieve machine documents right now. Please try again.",
+          evidence: [],
+        },
+      });
+    }
+  }
 }
 
 export function registerVoiceRoutes(app: Express, config: AppConfig) {
@@ -260,22 +308,39 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
 
         const refreshed = await findWorkflowRequest(db, requestId);
         if (!refreshed) {
-          response.status(500).json({
-            success: false,
-            error: { code: "INTERNAL_ERROR", message: "Request could not be loaded." },
-          });
+          console.warn("workflow request missing after n8n post; using Mongo find fallback.");
+          await respondWithMongoFallback(
+            db,
+            config,
+            { requestId, organisationId, machineId },
+            response,
+          );
           return;
         }
         if (refreshed.status === "completed") {
-          const mapped = mapVoiceResult(refreshed);
-          const payload = await buildEvidenceResponse(
-            db,
-            session.organisationId,
-            requestId,
-            mapped.answer,
-            mapped.evidenceIds,
-          );
-          response.json({ success: true, data: payload });
+          try {
+            const mapped = mapVoiceResult(refreshed);
+            const payload = await buildEvidenceResponse(
+              db,
+              session.organisationId,
+              requestId,
+              mapped.answer,
+              mapped.evidenceIds,
+            );
+            response.json({ success: true, data: payload });
+          } catch (error) {
+            console.warn(
+              `buildEvidenceResponse failed; using Mongo find fallback: ${
+                error instanceof Error ? error.message : "unknown"
+              }`,
+            );
+            await respondWithMongoFallback(
+              db,
+              config,
+              { requestId, organisationId, machineId },
+              response,
+            );
+          }
           return;
         }
         if (refreshed.status === "failed") {
@@ -293,6 +358,31 @@ export function registerVoiceRoutes(app: Express, config: AppConfig) {
           data: { requestId, status: "pending" },
         });
       } catch (error) {
+        console.error(
+          `POST /voice/questions failed; attempting machine find fallback: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
+        try {
+          const session = request.liveSession;
+          const db = getDb();
+          const organisationId = session
+            ? asObjectId(session.organisationId)
+            : null;
+          const machineId = asObjectId(String(request.body?.machineId ?? ""));
+          if (db && organisationId && machineId) {
+            const requestId = newN8nRequestId();
+            await respondWithMongoFallback(
+              db,
+              config,
+              { requestId, organisationId, machineId },
+              response,
+            );
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
         next(error);
       }
     },

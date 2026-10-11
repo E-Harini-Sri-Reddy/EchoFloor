@@ -59,6 +59,7 @@ const permanentWorkerNav: NavItem[] = [
       pathname === "/worker/voice" ||
       pathname === "/worker/dashboard",
   },
+  { to: "/worker/work-log", label: "Work log", short: "Work" },
   { to: "/worker/machines", label: "Machine Details", short: "Machines" },
   { to: "/worker/tasks", label: "My Tasks", short: "Tasks" },
   {
@@ -84,6 +85,7 @@ const temporaryWorkerNav: NavItem[] = [
       pathname === "/worker/voice" ||
       pathname === "/worker/dashboard",
   },
+  { to: "/worker/work-log", label: "Work log", short: "Work" },
   {
     to: "/worker/issues",
     label: "Issues & Alerts",
@@ -99,8 +101,8 @@ const temporaryWorkerNav: NavItem[] = [
 ];
 
 const adminMobile = ["Home", "Machines", "Issues", "Users"];
-const permanentWorkerMobile = ["Home", "Issues", "Tasks", "My Shift"];
-const temporaryWorkerMobile = ["Home", "Issues", "Tasks", "History"];
+const permanentWorkerMobile = ["Home", "Work", "Issues", "Tasks"];
+const temporaryWorkerMobile = ["Home", "Work", "Issues", "Tasks"];
 
 function isNavActive(item: NavItem, pathname: string) {
   if (item.isActive) return item.isActive(pathname);

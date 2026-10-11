@@ -28,6 +28,92 @@ function snippet(doc: Record<string, unknown>, max = 280): string {
   return text.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function safeId(value: unknown): string {
+  try {
+    return toId(value);
+  } catch {
+    return String(value ?? "");
+  }
+}
+
+async function findByMachineId(
+  db: Db,
+  collectionName: string,
+  machineId: ObjectId,
+  organisationId: ObjectId,
+  limit = 20,
+): Promise<Record<string, unknown>[]> {
+  const projection = { embedding: 0, photoDataUrl: 0 };
+  const machineKey = toId(machineId);
+  const orgKey = toId(organisationId);
+
+  // Primary: machine id (+ org when present on the doc).
+  const filters: Record<string, unknown>[] =
+    collectionName === "machines"
+      ? [{ _id: machineId, organisationId }, { _id: machineId }]
+      : [
+          { machineId, organisationId },
+          { machineIdString: machineKey, organisationIdString: orgKey },
+          { machineId },
+          { machineIdString: machineKey },
+        ];
+
+  for (const filter of filters) {
+    try {
+      const rows = await db
+        .collection(collectionName)
+        .find(filter, { projection })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .toArray();
+      if (rows.length > 0) return rows;
+    } catch (error) {
+      console.warn(
+        `findByMachineId(${collectionName}) filter failed: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+  }
+  return [];
+}
+
+/**
+ * Guaranteed machine-scoped find across operational collections.
+ * Used whenever vector search / embeddings / complex filters fail.
+ */
+export async function scanMachineById(
+  db: Db,
+  organisationId: ObjectId,
+  machineId: ObjectId,
+): Promise<{
+  machine: Record<string, unknown> | null;
+  alerts: Record<string, unknown>[];
+  memories: Record<string, unknown>[];
+  records: Record<string, unknown>[];
+  tasks: Record<string, unknown>[];
+  constraints: Record<string, unknown>[];
+}> {
+  const [machineRows, alerts, memories, records, tasks, constraints] =
+    await Promise.all([
+      findByMachineId(db, "machines", machineId, organisationId, 1),
+      findByMachineId(db, "alerts", machineId, organisationId),
+      findByMachineId(db, "memories", machineId, organisationId),
+      findByMachineId(db, "records", machineId, organisationId),
+      findByMachineId(db, "tasks", machineId, organisationId),
+      findByMachineId(db, "constraints", machineId, organisationId),
+    ]);
+
+  return {
+    machine: machineRows[0] ?? null,
+    alerts,
+    memories,
+    records,
+    tasks,
+    constraints,
+  };
+}
+
 async function vectorSearchOnCollection(
   db: Db,
   collectionName: string,
@@ -52,7 +138,6 @@ async function vectorSearchOnCollection(
   };
   const filters: Record<string, unknown>[] = [
     { organisationIdString, machineIdString },
-    // Some Atlas indexes were created with the older filter field names.
     { organisationId: organisationIdString, machineId: machineIdString },
   ];
 
@@ -86,10 +171,6 @@ async function vectorSearchOnCollection(
   return [];
 }
 
-/**
- * Uses ATLAS_VECTOR_INDEX_NAME (default: echofloor_records_vector_index).
- * Prefers unified `records` (alerts/tasks/machines/memories/…), then `memories`.
- */
 async function vectorSearchMemories(
   db: Db,
   config: AppConfig,
@@ -109,152 +190,106 @@ async function vectorSearchMemories(
       queryVector,
       limit,
     );
-    if (rows.length > 0) {
-      console.info(
-        `Voice Mongo fallback: vector hit on ${collectionName} via ${indexName} (${rows.length} docs).`,
-      );
-      return rows;
-    }
+    if (rows.length > 0) return rows;
   }
   return [];
 }
 
-async function scanMachineMemories(
-  db: Db,
-  organisationId: ObjectId,
-  machineId: ObjectId,
-  limit = 20,
-): Promise<Record<string, unknown>[]> {
-  return db
-    .collection("memories")
-    .find(
-      { organisationId, machineId },
-      {
-        projection: {
-          title: 1,
-          content: 1,
-          text: 1,
-          summary: 1,
-          status: 1,
-          type: 1,
-          tags: 1,
-          createdAt: 1,
-          machineId: 1,
-          embedding: 0,
-        },
-      },
-    )
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .toArray();
-}
-
-async function scanMachineAlerts(
-  db: Db,
-  organisationId: ObjectId,
-  machineId: ObjectId,
-  limit = 20,
-): Promise<Record<string, unknown>[]> {
-  return db
-    .collection("alerts")
-    .find(
-      { organisationId, machineId },
-      {
-        projection: {
-          title: 1,
-          message: 1,
-          status: 1,
-          severity: 1,
-          issueKind: 1,
-          type: 1,
-          createdAt: 1,
-          expiresAt: 1,
-          machineId: 1,
-        },
-      },
-    )
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .toArray();
-}
-
-function buildAnswer(
+function buildAnswerFromScan(
   machineCode: string,
   machineName: string,
-  memories: Record<string, unknown>[],
-  alerts: Record<string, unknown>[],
+  scan: Awaited<ReturnType<typeof scanMachineById>>,
   source: VoiceFallbackResult["source"],
 ): string {
+  const { alerts, memories, records, tasks, constraints } = scan;
   const openAlerts = alerts.filter(
     (alert) => !["resolved", "dismissed"].includes(String(alert.status ?? "")),
   );
-  const resolvedAlerts = alerts.filter((alert) => String(alert.status ?? "") === "resolved");
-  const unresolvedMemories = memories.filter((memory) =>
-    ["unresolved", "pending_review"].includes(String(memory.status ?? "")),
-  );
-  const resolvedMemories = memories.filter((memory) =>
-    ["resolved", "verified", "archived"].includes(String(memory.status ?? "")),
-  );
-
   const parts: string[] = [
-    `For ${machineCode} (${machineName}), here is what MongoDB retrieved${
-      source === "vector_search" ? " via vector search" : ""
+    `For ${machineCode} (${machineName}), here is what MongoDB found for this machine${
+      source === "vector_search" ? " via vector search" : " via direct lookup"
     }.`,
   ];
 
-  if (openAlerts.length === 0 && memories.length === 0) {
-    parts.push("No memories or alerts were found for this machine yet.");
+  const total =
+    alerts.length + memories.length + records.length + tasks.length + constraints.length;
+  if (total === 0) {
+    parts.push("No documents were found for this machine id yet.");
     return parts.join(" ");
   }
 
   if (openAlerts.length > 0) {
-    const lines = openAlerts.slice(0, 5).map((alert) => {
-      const severity = String(alert.severity ?? "info");
-      const title = String(alert.title ?? "Alert");
-      const kind = alert.issueKind ? ` (${String(alert.issueKind)})` : "";
-      return `${severity}: ${title}${kind}`;
-    });
-    parts.push(`Open issues/alerts (${openAlerts.length}): ${lines.join("; ")}.`);
-  } else {
-    parts.push("There are no open alerts on this machine right now.");
+    parts.push(
+      `Open alerts (${openAlerts.length}): ${openAlerts
+        .slice(0, 5)
+        .map((a) => String(a.title ?? "Alert"))
+        .join("; ")}.`,
+    );
+  } else if (alerts.length > 0) {
+    parts.push(`Alerts on file (${alerts.length}), none currently open.`);
   }
 
-  if (resolvedAlerts.length > 0) {
-    const lines = resolvedAlerts.slice(0, 4).map((alert) => String(alert.title ?? "Resolved alert"));
-    parts.push(`Resolved alerts (${resolvedAlerts.length}): ${lines.join("; ")}.`);
+  if (memories.length > 0) {
+    parts.push(
+      `Memories (${memories.length}): ${memories
+        .slice(0, 5)
+        .map((m) => String(m.title ?? m.summary ?? "Memory"))
+        .join("; ")}.`,
+    );
   }
-
-  if (unresolvedMemories.length > 0) {
-    const lines = unresolvedMemories
-      .slice(0, 4)
-      .map((memory) => String(memory.title ?? memory.summary ?? "Memory"));
-    parts.push(`Open memory items (${unresolvedMemories.length}): ${lines.join("; ")}.`);
+  if (records.length > 0) {
+    parts.push(
+      `Search records (${records.length}): ${records
+        .slice(0, 5)
+        .map((r) => String(r.title ?? r.sourceType ?? "Record"))
+        .join("; ")}.`,
+    );
   }
-
-  if (resolvedMemories.length > 0) {
-    const lines = resolvedMemories
-      .slice(0, 4)
-      .map((memory) => String(memory.title ?? memory.summary ?? "Memory"));
-    parts.push(`Resolved/verified history (${resolvedMemories.length}): ${lines.join("; ")}.`);
+  if (tasks.length > 0) {
+    parts.push(
+      `Tasks (${tasks.length}): ${tasks
+        .slice(0, 4)
+        .map((t) => String(t.title ?? "Task"))
+        .join("; ")}.`,
+    );
   }
-
-  const extras = memories
-    .filter(
-      (memory) =>
-        !unresolvedMemories.includes(memory) && !resolvedMemories.includes(memory),
-    )
-    .slice(0, 3)
-    .map((memory) => String(memory.title ?? memory.summary ?? "Record"));
-  if (extras.length > 0) {
-    parts.push(`Related records: ${extras.join("; ")}.`);
+  if (constraints.length > 0) {
+    parts.push(
+      `Constraints (${constraints.length}): ${constraints
+        .slice(0, 4)
+        .map((c) => String(c.title ?? c.description ?? "Constraint"))
+        .join("; ")}.`,
+    );
   }
 
   return parts.join(" ");
 }
 
+function buildEvidence(
+  machineIdString: string,
+  docs: Record<string, unknown>[],
+): { evidence: VoiceFallbackEvidence[]; evidenceRecordIds: string[] } {
+  const evidence: VoiceFallbackEvidence[] = [];
+  const evidenceRecordIds: string[] = [];
+  for (const doc of docs.slice(0, 12)) {
+    const recordId = safeId(doc._id) || safeId(doc.sourceId);
+    if (!recordId || evidenceRecordIds.includes(recordId)) continue;
+    const text = snippet(doc);
+    if (!text) continue;
+    evidenceRecordIds.push(recordId);
+    evidence.push({
+      recordId,
+      text,
+      createdAt: asIso(doc.createdAt),
+      machineId: machineIdString,
+    });
+  }
+  return { evidence, evidenceRecordIds };
+}
+
 /**
- * Direct Mongo retrieval for voice Q&A when n8n is down: Atlas vector search when
- * embeddings are available, otherwise a machine-scoped scan of memories + alerts.
+ * Direct Mongo retrieval for voice Q&A.
+ * Tries vector search first; on any error or empty result, falls back to find({ machineId }).
  */
 export async function answerMachineFromMongo(
   db: Db,
@@ -265,93 +300,90 @@ export async function answerMachineFromMongo(
     queryText?: string;
   },
 ): Promise<VoiceFallbackResult> {
-  const machine = await db.collection("machines").findOne({
-    _id: input.machineId,
-    organisationId: input.organisationId,
-  });
-  if (!machine) {
-    return {
-      answer: "Machine not found for this organisation.",
-      evidence: [],
-      evidenceRecordIds: [],
-      source: "machine_scan",
-    };
-  }
-
-  const machineCode = String(machine.machineCode ?? "machine");
-  const machineName = String(machine.name ?? machineCode);
-  const organisationIdString = toId(input.organisationId);
   const machineIdString = toId(input.machineId);
-  const queryText =
-    input.queryText?.trim() ||
-    [
-      `Status, open issues, resolved issues, alerts, maintenance, damage, overheating,`,
-      `and history for machine ${machineCode} ${machineName}.`,
-    ].join(" ");
-
-  let memories: Record<string, unknown>[] = [];
-  let source: VoiceFallbackResult["source"] = "machine_scan";
+  const organisationIdString = toId(input.organisationId);
 
   try {
-    const vector = await embedQueryText(config, queryText);
-    if (vector && vector.length === config.embeddingDimensions) {
-      memories = await vectorSearchMemories(
-        db,
-        config,
-        organisationIdString,
-        machineIdString,
-        vector,
+    let source: VoiceFallbackResult["source"] = "machine_scan";
+    let vectorHits: Record<string, unknown>[] = [];
+
+    try {
+      const machine = await db.collection("machines").findOne({
+        _id: input.machineId,
+        organisationId: input.organisationId,
+      });
+      const machineCode = String(machine?.machineCode ?? "machine");
+      const machineName = String(machine?.name ?? machineCode);
+      const queryText =
+        input.queryText?.trim() ||
+        `Status, open issues, resolved issues, alerts, and history for machine ${machineCode} ${machineName}.`;
+
+      const vector = await embedQueryText(config, queryText);
+      if (vector && vector.length > 0) {
+        vectorHits = await vectorSearchMemories(
+          db,
+          config,
+          organisationIdString,
+          machineIdString,
+          vector,
+        );
+        if (vectorHits.length > 0) source = "vector_search";
+      }
+    } catch (error) {
+      console.warn(
+        `Voice vector path failed; using find(machineId): ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
       );
-      if (memories.length > 0) source = "vector_search";
-    } else if (vector && vector.length > 0) {
-      // Still try search if dimensions differ from config (index may match provider dims).
-      memories = await vectorSearchMemories(
-        db,
-        config,
-        organisationIdString,
-        machineIdString,
-        vector,
-      );
-      if (memories.length > 0) source = "vector_search";
+      vectorHits = [];
+      source = "machine_scan";
     }
-  } catch (error) {
-    console.warn(
-      `embedQueryText failed: ${error instanceof Error ? error.message : "unknown"}`,
+
+    const scan = await scanMachineById(db, input.organisationId, input.machineId);
+    const machineCode = String(scan.machine?.machineCode ?? "machine");
+    const machineName = String(scan.machine?.name ?? machineCode);
+
+    // Prefer vector hits for memories/records narrative when present; always merge alerts via find.
+    const memoryLike =
+      vectorHits.length > 0
+        ? vectorHits
+        : [...scan.memories, ...scan.records];
+
+    const answer = buildAnswerFromScan(
+      machineCode,
+      machineName,
+      {
+        ...scan,
+        memories: memoryLike.length > 0 ? memoryLike : scan.memories,
+      },
+      source,
     );
+
+    const { evidence, evidenceRecordIds } = buildEvidence(machineIdString, [
+      ...scan.alerts,
+      ...memoryLike,
+      ...scan.tasks,
+      ...scan.constraints,
+    ]);
+
+    return { answer, evidence, evidenceRecordIds, source };
+  } catch (error) {
+    console.error(
+      `answerMachineFromMongo crashed; hard find(machineId) fallback: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
+    const scan = await scanMachineById(db, input.organisationId, input.machineId);
+    const machineCode = String(scan.machine?.machineCode ?? "machine");
+    const machineName = String(scan.machine?.name ?? machineCode);
+    const answer = buildAnswerFromScan(machineCode, machineName, scan, "machine_scan");
+    const { evidence, evidenceRecordIds } = buildEvidence(machineIdString, [
+      ...scan.alerts,
+      ...scan.memories,
+      ...scan.records,
+      ...scan.tasks,
+      ...scan.constraints,
+    ]);
+    return { answer, evidence, evidenceRecordIds, source: "machine_scan" };
   }
-
-  if (memories.length === 0) {
-    memories = await scanMachineMemories(db, input.organisationId, input.machineId);
-    source = "machine_scan";
-  }
-
-  const alerts = await scanMachineAlerts(db, input.organisationId, input.machineId);
-  const answer = buildAnswer(machineCode, machineName, memories, alerts, source);
-
-  const evidence: VoiceFallbackEvidence[] = [];
-  const evidenceRecordIds: string[] = [];
-
-  for (const alert of alerts.slice(0, 8)) {
-    const recordId = toId(alert._id);
-    evidenceRecordIds.push(recordId);
-    evidence.push({
-      recordId,
-      text: snippet(alert),
-      createdAt: asIso(alert.createdAt),
-      machineId: machineIdString,
-    });
-  }
-  for (const memory of memories.slice(0, 8)) {
-    const recordId = toId(memory._id);
-    if (evidenceRecordIds.includes(recordId)) continue;
-    evidenceRecordIds.push(recordId);
-    evidence.push({
-      recordId,
-      text: snippet(memory),
-      createdAt: asIso(memory.createdAt),
-      machineId: machineIdString,
-    });
-  }
-
-  return { answer, evidence, evidenceRecordIds, source };
 }

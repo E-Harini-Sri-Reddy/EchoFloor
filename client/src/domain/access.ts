@@ -154,6 +154,7 @@ export function temporaryWorkerMayOpen(pathname: string): boolean {
   const allowed = [
     "/worker/voice",
     "/worker/dashboard",
+    "/worker/work-log",
     "/worker/issues",
     "/worker/report-issue",
     "/worker/alerts",

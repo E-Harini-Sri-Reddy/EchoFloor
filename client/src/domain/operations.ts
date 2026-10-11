@@ -1233,6 +1233,111 @@ export function resolveAlert(db: DemoDatabase, alertId: string): OperationResult
   };
 }
 
+export interface DailyWorkLogInput {
+  machineId: string;
+  title: string;
+  content: string;
+  /** Optional ISO date for the work day (defaults to today). */
+  workDate?: string;
+}
+
+/**
+ * Worker manual daily work log (text) — stored as an operational_note memory.
+ */
+export function createDailyWorkLog(
+  db: DemoDatabase,
+  input: DailyWorkLogInput,
+): OperationResult<MemoryRecord> {
+  if (!db.session) return fail("FORBIDDEN", "Sign in is required.");
+  const session = db.session;
+  if (session.role !== "worker" && session.role !== "admin") {
+    return fail("FORBIDDEN", "Only organisation members can add work logs.");
+  }
+  const fieldErrors: Record<string, string> = {};
+  const machine = machineById(db, session.organisationId, input.machineId);
+  if (!machine) fieldErrors.machineId = "Choose a machine in this organisation.";
+  if (input.title.trim().length < 3) {
+    fieldErrors.title = "Enter a short title for today’s work.";
+  }
+  if (input.content.trim().length < 12) {
+    fieldErrors.content = "Describe the work done in at least 12 characters.";
+  }
+  let workDay = new Date();
+  if (input.workDate?.trim()) {
+    const parsed = new Date(input.workDate);
+    if (Number.isNaN(parsed.getTime())) {
+      fieldErrors.workDate = "Choose a valid work date.";
+    } else {
+      workDay = parsed;
+    }
+  }
+  if (Object.keys(fieldErrors).length > 0) {
+    return fail("VALIDATION", "Check the work log.", fieldErrors);
+  }
+
+  const now = new Date().toISOString();
+  const dayLabel = workDay.toISOString().slice(0, 10);
+  const title = input.title.trim();
+  const content = input.content.trim();
+  const memory: MemoryRecord = {
+    id: newId("mem"),
+    organisationId: session.organisationId,
+    machineId: input.machineId,
+    type: "operational_note",
+    title: `${dayLabel}: ${title}`,
+    content: `${content}\n\nWork date: ${dayLabel}. Logged by ${session.displayName}.`,
+    summary: content.slice(0, 140),
+    status: "verified",
+    source: { type: "text", submittedBy: session.userId },
+    tags: ["work-log", "daily", dayLabel],
+    currentRevision: 1,
+    example: false,
+    createdBy: session.userId,
+    createdAt: now,
+    updatedAt: now,
+    verifiedAt: now,
+  };
+
+  return {
+    ok: true,
+    data: memory,
+    db: {
+      ...db,
+      memories: [memory, ...db.memories],
+      revisions: [
+        {
+          id: newId("rev"),
+          organisationId: session.organisationId,
+          memoryId: memory.id,
+          revisionNumber: 1,
+          snapshot: {
+            type: memory.type,
+            title: memory.title,
+            content: memory.content,
+            summary: memory.summary,
+            status: memory.status,
+            tags: memory.tags,
+          },
+          changeSummary: "Daily work log",
+          changedBy: session.userId,
+          createdAt: now,
+        },
+        ...db.revisions,
+      ],
+      auditEvents: [
+        ...db.auditEvents,
+        audit(
+          session,
+          "memory.create",
+          "memory",
+          memory.id,
+          `Logged daily work on ${machine!.machineCode}.`,
+        ),
+      ],
+    },
+  };
+}
+
 function isOverheatingAlert(alert: Alert): boolean {
   if (alert.issueKind === "overheating") return true;
   if (alert.severity === "critical" && alert.type === "machine_hazard") return true;

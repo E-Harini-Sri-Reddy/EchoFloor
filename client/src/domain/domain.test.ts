@@ -9,6 +9,7 @@ import { constraintDisplayStatus, isConstraintActive } from "@/domain/constraint
 import { diffMemoryEdit, memoryToEditable } from "@/domain/memoryEdits";
 import {
   assignWorkerToShift,
+  createDailyWorkLog,
   createReport,
   createTask,
   acceptShiftAssignment,
@@ -274,6 +275,23 @@ describe("registration and reports", () => {
       expect(memoryById(created.db, IDS.northstar, IDS.seal)?.content).toBe(
         memoryById(before, IDS.northstar, IDS.seal)?.content,
       );
+    }
+  });
+
+  it("lets a worker log daily work as an operational note", () => {
+    const before = asWorker(createSeed());
+    const created = createDailyWorkLog(before, {
+      machineId: IDS.m104,
+      title: "Evening forming run",
+      content: "Ran 36 cycles after seal check. No leaks observed at half speed.",
+      workDate: "2026-10-10T12:00:00.000Z",
+    });
+    expect(created.ok).toBe(true);
+    if (created.ok && created.data) {
+      expect(created.data.type).toBe("operational_note");
+      expect(created.data.status).toBe("verified");
+      expect(created.data.tags).toContain("work-log");
+      expect(created.data.title).toMatch(/^2026-10-10:/);
     }
   });
 });

@@ -5,6 +5,7 @@ import {
   acknowledgeHandover,
   assignWorkerToShift,
   createMachine,
+  createDailyWorkLog,
   createReport,
   createTask,
   reportMachineIssue,
@@ -38,6 +39,7 @@ import {
   type CreateTaskInput,
   type AddMemberInput,
   type MachineInput,
+  type DailyWorkLogInput,
   type ReportInput,
   type ReportMachineIssueInput,
   type UpdateShiftPolicyInput,
@@ -240,6 +242,8 @@ export const demoStore = {
     changes: FieldChange[],
   ) => apply(updateMemory(database, memoryId, draft, expectedRevision, changes)),
   createReport: (input: ReportInput) => apply(createReport(database, input)),
+  createDailyWorkLog: (input: DailyWorkLogInput) =>
+    apply(createDailyWorkLog(database, input)),
   reportMachineIssue: (input: ReportMachineIssueInput) =>
     apply(reportMachineIssue(database, input)),
   createTask: (input: CreateTaskInput) => apply(createTask(database, input)),

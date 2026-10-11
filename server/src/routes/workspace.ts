@@ -1314,4 +1314,175 @@ export function registerWorkspaceRoutes(app: Express, config: AppConfig) {
       }
     },
   );
+
+  app.post(
+    `${prefix}/work-logs`,
+    async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        const db = getDb();
+        if (!db) return unavailable(response);
+
+        const organisationId = asObjectId(String(request.body?.organisationId ?? ""));
+        const submittedBy = asObjectId(String(request.body?.submittedBy ?? ""));
+        const machineId = asObjectId(String(request.body?.machineId ?? ""));
+        const title = String(request.body?.title ?? "").trim();
+        const content = String(request.body?.content ?? "").trim();
+        const workDateRaw = String(request.body?.workDate ?? "").trim();
+
+        const fieldErrors: Record<string, string> = {};
+        if (!organisationId || !submittedBy) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "organisationId and submittedBy are required.",
+            },
+          });
+          return;
+        }
+        if (!machineId) fieldErrors.machineId = "Choose a machine in this organisation.";
+        if (title.length < 3) {
+          fieldErrors.title = "Enter a short title for today’s work.";
+        }
+        if (content.length < 12) {
+          fieldErrors.content = "Describe the work done in at least 12 characters.";
+        }
+        let workDay = new Date();
+        if (workDateRaw) {
+          const parsed = new Date(workDateRaw);
+          if (Number.isNaN(parsed.getTime())) {
+            fieldErrors.workDate = "Choose a valid work date.";
+          } else {
+            workDay = parsed;
+          }
+        }
+        if (Object.keys(fieldErrors).length > 0) {
+          response.status(400).json({
+            success: false,
+            error: {
+              code: "VALIDATION",
+              message: "Check the work log.",
+              fieldErrors,
+            },
+          });
+          return;
+        }
+
+        const membership = await db.collection("memberships").findOne({
+          userId: submittedBy,
+          organisationId,
+          status: { $in: ["active", "suspended"] },
+        });
+        if (!membership || membership.status === "suspended") {
+          response.status(403).json({
+            success: false,
+            error: {
+              code: "FORBIDDEN",
+              message: "You cannot add work logs for this organisation.",
+            },
+          });
+          return;
+        }
+
+        const machine = await db.collection("machines").findOne({
+          _id: machineId!,
+          organisationId,
+        });
+        if (!machine) {
+          response.status(404).json({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Machine not found." },
+          });
+          return;
+        }
+
+        const user = await db.collection("users").findOne({ _id: submittedBy });
+        const displayName = String(user?.displayName ?? "Worker");
+        const dayLabel = workDay.toISOString().slice(0, 10);
+        const now = new Date();
+        const memoryId = new ObjectId();
+        const orgString = toId(organisationId);
+        const machineString = toId(machineId!);
+        const fullTitle = `${dayLabel}: ${title}`;
+        const fullContent = `${content}\n\nWork date: ${dayLabel}. Logged by ${displayName}.`;
+        const memoryBase = {
+          _id: memoryId,
+          organisationId,
+          machineId,
+          organisationIdString: orgString,
+          machineIdString: machineString,
+          type: "operational_note",
+          title: fullTitle,
+          content: fullContent,
+          summary: content.slice(0, 140),
+          status: "verified",
+          source: { type: "text", submittedBy },
+          tags: ["work-log", "daily", dayLabel],
+          currentRevision: 1,
+          example: false,
+          contentVersion: 1,
+          embeddingStatus: "pending",
+          createdBy: submittedBy,
+          createdAt: now,
+          updatedAt: now,
+          verifiedAt: now,
+        };
+        const memoryDoc = {
+          ...memoryBase,
+          text: buildSearchableText(memoryBase, {
+            machineName: String(machine.name ?? machine.machineCode ?? ""),
+          }),
+        };
+
+        await db.collection("memories").insertOne(memoryDoc);
+        await db.collection("memory_revisions").insertOne({
+          _id: new ObjectId(),
+          organisationId,
+          memoryId,
+          revisionNumber: 1,
+          snapshot: {
+            type: memoryDoc.type,
+            title: memoryDoc.title,
+            content: memoryDoc.content,
+            summary: memoryDoc.summary,
+            status: memoryDoc.status,
+            tags: memoryDoc.tags,
+          },
+          changeSummary: "Daily work log",
+          changedBy: submittedBy,
+          createdAt: now,
+        });
+        await db.collection("audit_events").insertOne({
+          _id: new ObjectId(),
+          organisationId,
+          actorUserId: submittedBy,
+          action: "memory.create",
+          entityType: "memory",
+          entityId: memoryId,
+          summary: `Logged daily work on ${String(machine.machineCode)}.`,
+          createdAt: now,
+        });
+
+        triggerMemoryEmbedding(
+          config,
+          toId(memoryId),
+          orgString,
+          1,
+          String(memoryDoc.text ?? fullContent),
+        );
+
+        const packed = await workspaceForUser(submittedBy);
+        response.status(201).json({
+          success: true,
+          data: {
+            memoryId: toId(memoryId),
+            workspace: packed?.workspace ?? null,
+            session: packed?.session ?? null,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 }

@@ -70,7 +70,10 @@ export function WorkerDashboardPage() {
           </p>
         </div>
         <div className="row">
-          <ButtonLink to="/worker/issues/report">Report issue</ButtonLink>
+          <ButtonLink to="/worker/work-log">Log today’s work</ButtonLink>
+          <ButtonLink to="/worker/issues/report" variant="secondary">
+            Report issue
+          </ButtonLink>
           <ButtonLink to="/worker/tasks" variant="secondary">
             My tasks ({openTasks.length})
           </ButtonLink>
